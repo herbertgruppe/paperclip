@@ -4,7 +4,8 @@ import type { RegisteredProvider } from "../oauth/types.js";
 import type { SlidingWindowLimiter } from "../oauth/rate-limiter.js";
 import { generateCodeVerifier, deriveCodeChallenge } from "../oauth/pkce.js";
 import { validateReturnUrl } from "../oauth/redirect-allowlist.js";
-import { oauthAuthorizationStates } from "@paperclipai/db/schema/oauth";
+import { oauthAuthorizationStates, oauthConnections } from "@paperclipai/db/schema/oauth";
+import { and, eq } from "drizzle-orm";
 
 export interface OAuthRouteDeps {
   registry: ProviderRegistry;
@@ -13,7 +14,9 @@ export interface OAuthRouteDeps {
   db: any;
   publicUrl: string;
   rateLimiter: SlidingWindowLimiter;
-  // additional deps wired in later tasks: secretService
+  // secretService is consumed by upcoming tasks (T20 callback, T22 disconnect).
+  // Typed as `unknown` for now so the binding exists without forcing a helper API.
+  secretService: unknown;
 }
 
 const STATE_TTL_MS = 10 * 60 * 1000;
@@ -101,10 +104,11 @@ export function oauthRoutes(deps: OAuthRouteDeps): Router {
         : "/settings/connections";
     const expiresAt = new Date(Date.now() + STATE_TTL_MS);
 
+    const companyId = (req.params as unknown as { companyId: string }).companyId;
     const [row] = await deps.db
       .insert(oauthAuthorizationStates)
       .values({
-        companyId: req.params.companyId,
+        companyId,
         providerId: provider.config.id,
         codeVerifier: verifier,
         redirectUri,
@@ -129,5 +133,63 @@ export function oauthRoutes(deps: OAuthRouteDeps): Router {
     res.json({ authorizeUrl: authorizeUrl.toString(), state: row.id });
   });
 
+  r.get("/connections", async (req, res) => {
+    if (!ensureMember(req, res)) return;
+    const companyId = (req.params as unknown as { companyId: string }).companyId;
+    const rows = await deps.db.query.oauthConnections.findMany({
+      where: eq(oauthConnections.companyId, companyId),
+    });
+    res.json({ connections: (rows as unknown[]).map((c) => publicConnection(c)) });
+  });
+
+  r.get("/connections/:id", async (req, res) => {
+    if (!ensureMember(req, res)) return;
+    const companyId = (req.params as unknown as { companyId: string; id: string }).companyId;
+    const row = await deps.db.query.oauthConnections.findFirst({
+      where: and(
+        eq(oauthConnections.id, req.params.id),
+        eq(oauthConnections.companyId, companyId),
+      ),
+    });
+    if (!row || (row as { companyId: string }).companyId !== companyId) {
+      res.status(404).end();
+      return;
+    }
+    res.json(publicConnection(row));
+  });
+
   return r;
+}
+
+function publicConnection(c: unknown) {
+  const row = c as {
+    id: string;
+    providerId: string;
+    status: string;
+    accountId: string | null;
+    accountLabel: string | null;
+    scopes: string[];
+    accessTokenExpiresAt: Date | null;
+    lastRefreshedAt: Date | null;
+    lastError: string | null;
+    lastErrorAt: Date | null;
+    refreshAttemptCount: number;
+    createdAt: Date;
+    updatedAt: Date;
+  };
+  return {
+    id: row.id,
+    providerId: row.providerId,
+    status: row.status,
+    accountId: row.accountId,
+    accountLabel: row.accountLabel,
+    scopes: row.scopes,
+    accessTokenExpiresAt: row.accessTokenExpiresAt,
+    lastRefreshedAt: row.lastRefreshedAt,
+    lastError: row.lastError,
+    lastErrorAt: row.lastErrorAt,
+    refreshAttemptCount: row.refreshAttemptCount,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
 }

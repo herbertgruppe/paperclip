@@ -48,6 +48,7 @@ function setup() {
       db: db as unknown as never,
       publicUrl: "https://app.paperclip.test",
       rateLimiter: { check: async () => true },
+      secretService: {},
     }),
   );
   return { app, insertMock };
@@ -129,6 +130,7 @@ describe("POST /connect/:providerId", () => {
         db: db as unknown as never,
         publicUrl: "https://app.paperclip.test",
         rateLimiter: { check: async () => false },
+        secretService: {},
       }),
     );
     const res = await request(app).post("/api/companies/c1/oauth/connect/github");
