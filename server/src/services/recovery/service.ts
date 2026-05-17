@@ -2366,6 +2366,7 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
             .select({
               companyId: issueRecoveryActions.companyId,
               issueId: issueRecoveryActions.sourceIssueId,
+              kind: issueRecoveryActions.kind,
               status: issueRecoveryActions.status,
             })
             .from(issueRecoveryActions)
@@ -2415,7 +2416,15 @@ export function recoveryService(db: Db, deps: { enqueueWakeup: RecoveryWakeup })
       })),
       pendingInteractions: interactionRows,
       pendingApprovals: approvalRows,
-      openRecoveryIssues: openRecoveryIssues.concat(recoveryActionRows),
+      openRecoveryIssues: openRecoveryIssues.concat(
+        recoveryActionRows
+          .filter((row) => row.kind === "issue_graph_liveness")
+          .map((row) => ({
+            companyId: row.companyId,
+            issueId: row.issueId,
+            status: row.status,
+          })),
+      ),
       now: new Date(),
     });
   }
