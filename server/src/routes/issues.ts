@@ -1335,12 +1335,11 @@ export function issueRoutes(
   function isStatusOnlyCheapRecoveryContext(contextSnapshot: unknown) {
     if (!contextSnapshot || typeof contextSnapshot !== "object" || Array.isArray(contextSnapshot)) return false;
     const context = contextSnapshot as Record<string, unknown>;
-    return context.modelProfile === "cheap" && (
-      context.recoveryIntent === "status_only" ||
-      context.allowDeliverableWork === false ||
-      context.allowDocumentUpdates === false ||
-      context.resumeRequiresNormalModel === true
-    );
+    return context.modelProfile === "cheap" &&
+      context.recoveryIntent === "status_only" &&
+      context.allowDeliverableWork === false &&
+      context.allowDocumentUpdates === false &&
+      context.resumeRequiresNormalModel === true;
   }
 
   function requestsCheapIssueAssigneeModelProfile(input: { assigneeAdapterOverrides?: unknown }) {
