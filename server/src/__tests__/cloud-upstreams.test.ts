@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { HttpError } from "../errors.js";
-import { cloudUpstreamRemoteFailureReport } from "../services/cloud-upstreams.js";
+import { cloudUpstreamRemoteFailureReport, parseSecureCloudUpstreamUrl } from "../services/cloud-upstreams.js";
 
 describe("cloud upstream remote failures", () => {
   it("preserves the cloud response body and message on run reports", () => {
@@ -48,5 +48,14 @@ describe("cloud upstream remote failures", () => {
     expect(cloudUpstreamRemoteFailureReport(new Error("network failed"))).toEqual({
       error: "network failed",
     });
+  });
+
+  it("requires HTTPS for credential-bearing cloud URLs except localhost development", () => {
+    expect(parseSecureCloudUpstreamUrl("https://cloud.example.test/token", "Cloud upstream token URL").origin)
+      .toBe("https://cloud.example.test");
+    expect(parseSecureCloudUpstreamUrl("http://localhost:3100/token", "Cloud upstream token URL").origin)
+      .toBe("http://localhost:3100");
+    expect(() => parseSecureCloudUpstreamUrl("http://cloud.example.test/token", "Cloud upstream token URL"))
+      .toThrow(/must use HTTPS/i);
   });
 });

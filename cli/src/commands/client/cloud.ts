@@ -239,6 +239,7 @@ export async function pushCloud(opts: CloudPushOptions): Promise<unknown> {
 
 export async function discoverUpstream(remoteUrl: string): Promise<UpstreamDiscovery> {
   const base = new URL(remoteUrl);
+  assertSecureCloudUpstreamUrl(base, "Cloud upstream remote URL");
   const discoveryUrl = new URL("/.well-known/paperclip-upstream", base);
   return requestCloudJson<UpstreamDiscovery>(discoveryUrl.toString(), { method: "GET" });
 }
@@ -347,6 +348,8 @@ async function authorizeWithBrowser(
 ): Promise<TokenResponse> {
   const pkce = discovery.auth.pkce;
   if (!pkce) throw new Error("Remote did not advertise PKCE authorization.");
+  assertSecureCloudUpstreamUrl(pkce.authorizeUrl, "Cloud upstream authorize URL");
+  assertSecureCloudUpstreamUrl(pkce.tokenUrl, "Cloud upstream token URL");
   const callback = await startPkceCallbackServer();
   const verifier = randomBytes(32).toString("base64url");
   const challenge = createHash("sha256").update(verifier).digest("base64url");
@@ -388,6 +391,8 @@ async function authorizeWithDeviceCode(
 ): Promise<TokenResponse> {
   const device = discovery.auth.deviceCode;
   if (!device) throw new Error("Remote did not advertise device-code authorization.");
+  assertSecureCloudUpstreamUrl(device.deviceCodeUrl, "Cloud upstream device-code URL");
+  assertSecureCloudUpstreamUrl(device.tokenUrl, "Cloud upstream token URL");
   const response = await requestCloudJson<{
     deviceCode: string;
     userCode: string;
@@ -407,6 +412,7 @@ async function authorizeWithDeviceCode(
   console.error(pc.bold("Cloud device authorization required"));
   console.error(`Open: ${response.verificationUri}`);
   console.error(`Code: ${response.userCode}`);
+  assertSecureCloudUpstreamUrl(response.verificationUri, "Cloud upstream verification URL");
   if (opts.openBrowser) openUrl(response.verificationUri);
 
   const expiresAt = Date.parse(response.expiresAt);
@@ -433,6 +439,18 @@ async function authorizeWithDeviceCode(
     }
   }
   throw new Error("Device-code authorization expired before it was approved.");
+}
+
+function assertSecureCloudUpstreamUrl(url: string | URL, label: string): void {
+  const parsed = typeof url === "string" ? new URL(url) : url;
+  if (parsed.protocol === "https:" || isLocalhostHost(parsed.hostname)) {
+    return;
+  }
+  throw new Error(`${label} must use HTTPS except for localhost development.`);
+}
+
+function isLocalhostHost(hostname: string): boolean {
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname === "[::1]";
 }
 
 function buildEntitiesFromPortableExport(

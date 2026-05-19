@@ -8,6 +8,7 @@ import {
   buildBundleFromLocalCompany,
   cloudCommandExitCodes,
   connectCloud,
+  discoverUpstream,
 } from "../commands/client/cloud.js";
 import {
   LocalUpstreamPushCoordinator,
@@ -86,6 +87,15 @@ describe("cloud CLI helpers", () => {
     expect(() => assertDiscoveryCompatible(discovery({ supportedSchemaMajor: 99 }))).toThrow(/schema mismatch/i);
     expect(() => assertDiscoveryCompatible(discovery({ featureFlags: [] }))).toThrow(/cloud_sync/);
     expect(cloudCommandExitCodes.schemaMismatch).toBe(3);
+  });
+
+  it("requires HTTPS before fetching cloud discovery except for localhost development", async () => {
+    globalThis.fetch = vi.fn(async () => {
+      throw new Error("discovery fetch should not run for insecure remote URLs");
+    }) as typeof fetch;
+
+    await expect(discoverUpstream("http://cloud.example.test")).rejects.toThrow(/must use HTTPS/i);
+    expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 
   it("builds deterministic chunks with validated payload hashes", async () => {

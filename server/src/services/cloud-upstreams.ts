@@ -558,7 +558,7 @@ export function cloudUpstreamService(db: Db, options: { instanceId?: string } = 
         } : {}),
         events: [
           ...input.initialEvents,
-          event(failedAt.toISOString(), "push", "failed", failure.errorMessage ?? failure.error),
+          event(failedAt.toISOString(), currentStep, "failed", failure.errorMessage ?? failure.error),
         ],
         report: {
           runId: input.runId,
@@ -695,10 +695,7 @@ export function cloudUpstreamService(db: Db, options: { instanceId?: string } = 
 }
 
 async function fetchDiscovery(remoteUrl: string): Promise<Record<string, unknown>> {
-  const parsed = new URL(remoteUrl);
-  if (parsed.protocol !== "https:" && parsed.hostname !== "localhost" && parsed.hostname !== "127.0.0.1") {
-    throw badRequest("Cloud upstream targets require HTTPS except localhost development");
-  }
+  const parsed = parseSecureCloudUpstreamUrl(remoteUrl, "Cloud upstream target URL");
   const stackId = firstPathSegment(parsed.pathname);
   const discoveryUrl = new URL("/.well-known/paperclip-upstream", parsed.origin);
   if (stackId) {
@@ -809,7 +806,26 @@ function consentUrlFromDiscovery(discovery: Record<string, unknown>): string {
 }
 
 function tokenUrlFromDiscovery(discovery: Record<string, unknown>): string {
-  return stringField(objectField(objectField(discovery, "auth"), "pkce"), "tokenUrl");
+  const url = stringField(objectField(objectField(discovery, "auth"), "pkce"), "tokenUrl");
+  parseSecureCloudUpstreamUrl(url, "Cloud upstream token URL");
+  return url;
+}
+
+export function parseSecureCloudUpstreamUrl(url: string, label: string): URL {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw badRequest(`${label} must be a valid URL`);
+  }
+  if (parsed.protocol === "https:" || isLocalhostHost(parsed.hostname)) {
+    return parsed;
+  }
+  throw badRequest(`${label} must use HTTPS except localhost development`);
+}
+
+function isLocalhostHost(hostname: string): boolean {
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname === "[::1]";
 }
 
 function buildWarnings(schemaMajor: number): CloudUpstreamWarning[] {

@@ -1,4 +1,4 @@
-import { boolean, index, integer, jsonb, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import { type AnyPgColumn, boolean, index, integer, jsonb, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
 import { companies } from "./companies.js";
 
 export const cloudUpstreamConnections = pgTable(
@@ -33,7 +33,7 @@ export const cloudUpstreamConnections = pgTable(
     pendingRedirectUri: text("pending_redirect_uri"),
     pendingTokenUrl: text("pending_token_url"),
 
-    lastRunId: uuid("last_run_id"),
+    lastRunId: uuid("last_run_id").references((): AnyPgColumn => cloudUpstreamRuns.id, { onDelete: "set null" }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
   },
