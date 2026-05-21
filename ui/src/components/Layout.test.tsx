@@ -39,8 +39,11 @@ vi.mock("@/lib/router", () => ({
   useNavigate: () => mockNavigate,
   useNavigationType: () => "PUSH",
   useParams: () => {
-    const firstSegment = currentPathname.split("/").filter(Boolean)[0];
-    return { companyPrefix: firstSegment === "instance" ? undefined : firstSegment ?? "PAP" };
+    const [firstSegment, secondSegment] = currentPathname.split("/").filter(Boolean);
+    return {
+      companyPrefix: firstSegment === "instance" ? undefined : firstSegment ?? "PAP",
+      pluginRoutePath: firstSegment === "instance" ? undefined : secondSegment,
+    };
   },
 }));
 
@@ -441,6 +444,61 @@ describe("Layout", () => {
     expect(container.textContent).not.toContain("Main company nav");
     expect(container.textContent).not.toContain("Company settings sidebar");
     expect(container.textContent).not.toContain("Instance sidebar");
+
+    await act(async () => {
+      root.unmount();
+    });
+  });
+
+  it("keeps the route-scoped plugin sidebar on nested plugin page routes", async () => {
+    currentPathname = "/PAP/wiki/page/templates";
+    mockPluginSlots.slots = [
+      {
+        type: "page",
+        id: "wiki-page",
+        displayName: "Wiki Page",
+        exportName: "WikiPage",
+        routePath: "wiki",
+        pluginId: "plugin-1",
+        pluginKey: "wiki-plugin",
+        pluginDisplayName: "Wiki Plugin",
+        pluginVersion: "1.0.0",
+      },
+      {
+        type: "routeSidebar",
+        id: "wiki-route-sidebar",
+        displayName: "Wiki Sidebar",
+        exportName: "WikiSidebar",
+        routePath: "wiki",
+        pluginId: "plugin-1",
+        pluginKey: "wiki-plugin",
+        pluginDisplayName: "Wiki Plugin",
+        pluginVersion: "1.0.0",
+      },
+    ];
+    const root = createRoot(container);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <Layout />
+        </QueryClientProvider>,
+      );
+    });
+    await flushReact();
+    await flushReact();
+
+    expect(mockUsePluginSlots).toHaveBeenCalledWith(
+      expect.objectContaining({
+        companyId: "company-1",
+        enabled: true,
+      }),
+    );
+    expect(container.textContent).toContain("Plugin route sidebar: Wiki Sidebar");
+    expect(container.textContent).not.toContain("Main company nav");
 
     await act(async () => {
       root.unmount();

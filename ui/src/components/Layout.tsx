@@ -74,7 +74,10 @@ export function Layout() {
     selectionSource,
     setSelectedCompanyId,
   } = useCompany();
-  const { companyPrefix } = useParams<{ companyPrefix: string }>();
+  const {
+    companyPrefix,
+    pluginRoutePath: matchedPluginRoutePath,
+  } = useParams<{ companyPrefix: string; pluginRoutePath?: string }>();
   const navigate = useNavigate();
   const location = useLocation();
   const navigationType = useNavigationType();
@@ -95,8 +98,8 @@ export function Layout() {
   const hasUnknownCompanyPrefix =
     Boolean(companyPrefix) && !companiesLoading && companies.length > 0 && !matchedCompany;
   const pluginRoutePath = useMemo(
-    () => getCompanyRouteSegment(location.pathname, companyPrefix),
-    [companyPrefix, location.pathname],
+    () => matchedPluginRoutePath?.toLowerCase() ?? getCompanyRouteSegment(location.pathname, companyPrefix),
+    [companyPrefix, location.pathname, matchedPluginRoutePath],
   );
   const routeSidebarCompanyId = matchedCompany?.id ?? null;
   const routeSidebarCompanyPrefix = matchedCompany?.issuePrefix ?? null;
