@@ -8,6 +8,7 @@ import {
   buildBundleFromLocalCompany,
   cloudCommandExitCodes,
   connectCloud,
+  resolveDeviceCodeExpiresAt,
 } from "../commands/client/cloud.js";
 import {
   LocalUpstreamPushCoordinator,
@@ -80,6 +81,15 @@ describe("cloud CLI helpers", () => {
   it("hard-blocks incompatible transfer schema versions with the stable schema exit code", () => {
     expect(() => assertDiscoveryCompatible(discovery({ supportedSchemaMajor: 99 }))).toThrow(/schema mismatch/i);
     expect(cloudCommandExitCodes.schemaMismatch).toBe(3);
+  });
+
+  it("falls back to a bounded device-code expiry when the cloud omits or malforms expiresAt", () => {
+    const now = Date.UTC(2026, 4, 22, 13, 0, 0);
+    const validExpiry = "2026-05-22T13:05:00.000Z";
+
+    expect(resolveDeviceCodeExpiresAt(validExpiry, now)).toBe(Date.parse(validExpiry));
+    expect(resolveDeviceCodeExpiresAt(undefined, now)).toBe(now + 15 * 60_000);
+    expect(resolveDeviceCodeExpiresAt("not-a-date", now)).toBe(now + 15 * 60_000);
   });
 
   it("builds deterministic chunks with validated payload hashes", async () => {

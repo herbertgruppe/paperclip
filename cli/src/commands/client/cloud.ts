@@ -40,6 +40,7 @@ import {
 const CLOUD_SYNC_CONFLICT_EXIT_CODE = 2;
 const CLOUD_SYNC_SCHEMA_MISMATCH_EXIT_CODE = 3;
 const CLOUD_SYNC_SCOPES = ["upstream_import:preview", "upstream_import:write", "upstream_import:read"];
+const DEVICE_CODE_FALLBACK_EXPIRES_MS = 15 * 60_000;
 
 interface CloudConnectOptions extends BaseClientOptions {
   noBrowser?: boolean;
@@ -253,6 +254,11 @@ export function assertDiscoveryCompatible(discovery: UpstreamDiscovery): void {
   }
 }
 
+export function resolveDeviceCodeExpiresAt(expiresAt: string | undefined, nowMs = Date.now()): number {
+  const parsed = typeof expiresAt === "string" ? Date.parse(expiresAt) : NaN;
+  return Number.isFinite(parsed) ? parsed : nowMs + DEVICE_CODE_FALLBACK_EXPIRES_MS;
+}
+
 export async function buildBundleFromLocalCompany(input: {
   localCompanyId: string;
   connection: CloudConnection;
@@ -388,7 +394,7 @@ async function authorizeWithDeviceCode(
     deviceCode: string;
     userCode: string;
     verificationUri: string;
-    expiresAt: string;
+    expiresAt?: string;
     intervalSeconds?: number;
   }>(device.deviceCodeUrl, {
     method: "POST",
@@ -405,9 +411,9 @@ async function authorizeWithDeviceCode(
   console.error(`Code: ${response.userCode}`);
   if (opts.openBrowser) openUrl(response.verificationUri);
 
-  const expiresAt = Date.parse(response.expiresAt);
+  const expiresAt = resolveDeviceCodeExpiresAt(response.expiresAt);
   const intervalMs = Math.max(500, (response.intervalSeconds ?? 5) * 1000);
-  while (!Number.isFinite(expiresAt) || Date.now() < expiresAt) {
+  while (Date.now() < expiresAt) {
     await sleep(intervalMs);
     try {
       return await requestCloudJson<TokenResponse>(device.tokenUrl, {

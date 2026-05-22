@@ -89,14 +89,14 @@ describe("CompanySettingsNav", () => {
     expect(pageTabBarMock).toHaveBeenCalledWith(
       expect.objectContaining({
         value: "members",
-          items: [
-            { value: "general", label: "General" },
-            { value: "environments", label: "Environments" },
-            { value: "cloud-upstream", label: "Cloud upstream" },
-            { value: "members", label: "Members" },
-            { value: "invites", label: "Invites" },
-            { value: "secrets", label: "Secrets" },
-          ],
+        items: [
+          { value: "general", label: "General" },
+          { value: "environments", label: "Environments" },
+          { value: "cloud-upstream", label: "Cloud upstream" },
+          { value: "members", label: "Members" },
+          { value: "invites", label: "Invites" },
+          { value: "secrets", label: "Secrets" },
+        ],
       }),
     );
 

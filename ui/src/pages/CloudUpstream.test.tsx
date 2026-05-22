@@ -1,6 +1,5 @@
 // @vitest-environment jsdom
 
-import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { CloudUpstreamRun, CloudUpstreamsState } from "@paperclipai/shared";
@@ -64,6 +63,12 @@ vi.mock("@/lib/router", () => ({
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
+
+async function act(callback: () => void | Promise<void>) {
+  await callback();
+  await Promise.resolve();
+  await new Promise((resolve) => window.setTimeout(resolve, 0));
+}
 
 async function flushReact() {
   await act(async () => {
@@ -142,7 +147,7 @@ describe("CloudUpstream", () => {
     expect(mockCloudUpstreamsApi.activateEntities).toHaveBeenCalledWith(
       "connection-1",
       "run-1",
-      { entityType: "agents" },
+      { companyId: "company-1", entityType: "agents" },
     );
 
     await act(async () => {
@@ -256,6 +261,39 @@ describe("CloudUpstream", () => {
       });
     } finally {
       replaceStateSpy.mockRestore();
+      window.localStorage.removeItem("paperclip-cloud-upstream-pending-connection");
+    }
+  });
+
+  it("does not retry the OAuth callback finish mutation after an error", async () => {
+    mockLocationState.pathname = "/PAP/company/settings/cloud-upstream";
+    mockLocationState.search = "?code=cb-code&state=cb-state";
+    mockCloudUpstreamsApi.list.mockResolvedValue({ connections: [], runs: [] });
+    mockCloudUpstreamsApi.finishConnect.mockRejectedValue(new Error("state expired"));
+    window.localStorage.setItem("paperclip-cloud-upstream-pending-connection", "pending-1");
+
+    try {
+      const root = createRoot(container);
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+      await act(async () => {
+        root.render(
+          <QueryClientProvider client={queryClient}>
+            <CloudUpstream />
+          </QueryClientProvider>,
+        );
+      });
+      await flushReact();
+      await flushReact();
+      await flushReact();
+
+      expect(mockCloudUpstreamsApi.finishConnect).toHaveBeenCalledTimes(1);
+      expect(container.textContent).toContain("state expired");
+
+      await act(async () => {
+        root.unmount();
+      });
+    } finally {
       window.localStorage.removeItem("paperclip-cloud-upstream-pending-connection");
     }
   });

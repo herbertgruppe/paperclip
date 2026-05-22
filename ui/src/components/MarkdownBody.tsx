@@ -110,21 +110,6 @@ function mergeScrollableBlockStyle(style?: React.CSSProperties): React.CSSProper
   };
 }
 
-function mergeCodeBlockStyle(
-  style: React.CSSProperties | undefined,
-  wrapped: boolean,
-): React.CSSProperties {
-  if (!wrapped) return mergeScrollableBlockStyle(style);
-  return {
-    ...style,
-    maxWidth: "100%",
-    overflowX: "hidden",
-    whiteSpace: "pre-wrap",
-    overflowWrap: "anywhere",
-    wordBreak: "break-word",
-  };
-}
-
 function flattenText(value: ReactNode): string {
   if (value == null) return "";
   if (typeof value === "string" || typeof value === "number") return String(value);
@@ -425,11 +410,24 @@ function CodeBlock({
       <pre
         {...preProps}
         ref={preRef}
-        style={mergeCodeBlockStyle(preProps.style as React.CSSProperties | undefined, wrapLines)}
+        style={{
+          ...mergeScrollableBlockStyle(preProps.style as React.CSSProperties | undefined),
+          ...(wrapLines
+            ? {
+                overflowX: "hidden",
+                whiteSpace: "pre-wrap",
+                overflowWrap: "anywhere",
+                wordBreak: "break-word",
+              }
+            : null),
+        }}
       >
         {children}
       </pre>
-      <div className="paperclip-markdown-codeblock-actions">
+      <div
+        className="paperclip-markdown-codeblock-actions"
+        data-active={copied || failed || wrapLines || undefined}
+      >
         <button
           type="button"
           onClick={() => setWrapLines((value) => !value)}

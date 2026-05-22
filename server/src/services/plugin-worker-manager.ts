@@ -437,6 +437,14 @@ export function createPluginWorkerHandle(
     childProcess.stdin.write(serialized);
   }
 
+  function errorCodeForWorkerHostError(err: unknown): number {
+    const code = (err as { code?: unknown } | null)?.code;
+    const pluginErrorCodes: readonly number[] = Object.values(PLUGIN_RPC_ERROR_CODES);
+    return typeof code === "number" && pluginErrorCodes.includes(code)
+      ? code
+      : JSONRPC_ERROR_CODES.INTERNAL_ERROR;
+  }
+
   // -----------------------------------------------------------------------
   // Incoming message handling
   // -----------------------------------------------------------------------
@@ -504,6 +512,11 @@ export function createPluginWorkerHandle(
 
     const directCompanyId = readNonEmptyString(params.companyId);
     if (directCompanyId) return { companyId: directCompanyId };
+
+    if (method === "performAction" && isRecord(params.actorContext)) {
+      const companyId = readNonEmptyString(params.actorContext.companyId);
+      return companyId ? { companyId } : null;
+    }
 
     if (method === "executeTool" && isRecord(params.runContext)) {
       const companyId = readNonEmptyString(params.runContext.companyId);
@@ -589,15 +602,12 @@ export function createPluginWorkerHandle(
       });
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
-      const errorCode = typeof (err as { code?: unknown }).code === "number"
-        ? (err as { code: number }).code
-        : JSONRPC_ERROR_CODES.INTERNAL_ERROR;
       log.error({ method, err: errorMessage }, "host handler error");
       try {
         sendMessage(
           createErrorResponse(
             request.id,
-            errorCode,
+            errorCodeForWorkerHostError(err),
             errorMessage,
           ),
         );

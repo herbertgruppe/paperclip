@@ -1534,13 +1534,12 @@ export function startWorkerRpcHost(options: WorkerRpcHostOptions): WorkerRpcHost
     const rawActor = params.actorContext && typeof params.actorContext === "object"
       ? params.actorContext
       : null;
-    const legacyCompanyId = stringOrNull(params.companyId) ?? stringOrNull(params.params.companyId);
     const actor = Object.freeze({
       type: actorTypeOrSystem(rawActor?.type),
       userId: stringOrNull(rawActor?.userId),
       agentId: stringOrNull(rawActor?.agentId),
       runId: stringOrNull(rawActor?.runId),
-      companyId: stringOrNull(rawActor?.companyId) ?? legacyCompanyId,
+      companyId: stringOrNull(rawActor?.companyId),
     });
     return Object.freeze({
       actor,
