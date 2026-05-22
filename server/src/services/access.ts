@@ -10,6 +10,7 @@ import {
 import type { PermissionKey, PrincipalType } from "@paperclipai/shared";
 import { conflict } from "../errors.js";
 import { authorizationService, type AuthorizationActor, type AuthorizationResource } from "./authorization.js";
+import { ensureHumanRoleDefaultGrants } from "./principal-access-compatibility.js";
 
 type MembershipRow = typeof companyMemberships.$inferSelect;
 type GrantInput = {
@@ -622,8 +623,28 @@ export function accessService(db: Db) {
         membership.membershipRole,
         "active",
       );
+      await ensureHumanRoleDefaultGrants(db, {
+        companyId: targetCompanyId,
+        principalId: membership.principalId,
+        membershipRole: membership.membershipRole,
+        grantedByUserId: null,
+      });
     }
     return sourceMemberships;
+  }
+
+  async function ensureRoleDefaultGrants(
+    companyId: string,
+    principalId: string,
+    membershipRole: string | null | undefined,
+    grantedByUserId: string | null,
+  ) {
+    return ensureHumanRoleDefaultGrants(db, {
+      companyId,
+      principalId,
+      membershipRole,
+      grantedByUserId,
+    });
   }
 
   async function listPrincipalGrants(
@@ -783,6 +804,7 @@ export function accessService(db: Db) {
     listMembers,
     listActiveUserMemberships,
     copyActiveUserMemberships,
+    ensureRoleDefaultGrants,
     archiveMember,
     setMemberPermissions,
     updateMemberAndPermissions,

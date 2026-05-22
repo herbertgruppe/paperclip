@@ -44,6 +44,12 @@ export { sidebarBadgeService } from "./sidebar-badges.js";
 export { sidebarPreferenceService } from "./sidebar-preferences.js";
 export { inboxDismissalService } from "./inbox-dismissals.js";
 export { accessService } from "./access.js";
+export {
+  backfillPrincipalAccessCompatibility,
+  ensureHumanRoleDefaultGrants,
+  insertMissingPrincipalGrants,
+  type PrincipalAccessCompatibilityBackfillStats,
+} from "./principal-access-compatibility.js";
 export { authorizationService } from "./authorization.js";
 export type {
   AuthorizationAction,

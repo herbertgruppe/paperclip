@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { and, eq, sql } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
+  agents,
   companies,
   companyMemberships,
   createDb,
@@ -15,6 +16,7 @@ import {
 } from "./helpers/embedded-postgres.js";
 import { accessService } from "../services/access.js";
 import { grantsForHumanRole } from "../services/company-member-roles.js";
+import { backfillPrincipalAccessCompatibility } from "../services/principal-access-compatibility.js";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
@@ -57,6 +59,7 @@ describeEmbeddedPostgres("access service", () => {
     await db.delete(issues);
     await db.delete(principalPermissionGrants);
     await db.delete(instanceUserRoles);
+    await db.delete(agents);
     await db.delete(companyMemberships);
     await db.delete(companies);
   });
@@ -265,6 +268,184 @@ describeEmbeddedPostgres("access service", () => {
     await expect(access.canUser(company.id, admin.principalId, "environments:manage")).resolves.toBe(true);
     await expect(access.canUser(company.id, operator.principalId, "environments:manage")).resolves.toBe(false);
     await expect(access.canUser(company.id, viewer.principalId, "environments:manage")).resolves.toBe(false);
+  });
+
+  it("backfills pre-upgrade human memberships with missing role grants without replacing custom grants", async () => {
+    const { company, owner } = await createCompanyWithOwner(db);
+    const scopedEnvironmentGrant = { environmentId: "env-1" };
+    const humanRows = await db
+      .insert(companyMemberships)
+      .values([
+        {
+          companyId: company.id,
+          principalType: "user",
+          principalId: `admin-${randomUUID()}`,
+          status: "active",
+          membershipRole: "admin",
+        },
+        {
+          companyId: company.id,
+          principalType: "user",
+          principalId: `operator-${randomUUID()}`,
+          status: "active",
+          membershipRole: "operator",
+        },
+        {
+          companyId: company.id,
+          principalType: "user",
+          principalId: `viewer-${randomUUID()}`,
+          status: "active",
+          membershipRole: "viewer",
+        },
+        {
+          companyId: company.id,
+          principalType: "user",
+          principalId: `legacy-${randomUUID()}`,
+          status: "active",
+          membershipRole: null,
+        },
+      ])
+      .returning();
+    const admin = humanRows[0]!;
+    const operator = humanRows[1]!;
+    const viewer = humanRows[2]!;
+    const legacyMember = humanRows[3]!;
+
+    await db.insert(principalPermissionGrants).values({
+      companyId: company.id,
+      principalType: "user",
+      principalId: owner.principalId,
+      permissionKey: "environments:manage",
+      scope: scopedEnvironmentGrant,
+      grantedByUserId: "custom-author",
+    });
+
+    const first = await backfillPrincipalAccessCompatibility(db);
+    const second = await backfillPrincipalAccessCompatibility(db);
+
+    expect(first.humanGrantsInserted).toBeGreaterThan(0);
+    expect(second.humanGrantsInserted).toBe(0);
+    await expect(accessService(db).canUser(company.id, admin.principalId, "environments:manage")).resolves.toBe(true);
+    await expect(accessService(db).canUser(company.id, operator.principalId, "tasks:assign")).resolves.toBe(true);
+    await expect(accessService(db).canUser(company.id, legacyMember.principalId, "tasks:assign")).resolves.toBe(true);
+    await expect(accessService(db).canUser(company.id, viewer.principalId, "tasks:assign")).resolves.toBe(false);
+
+    const ownerEnvironmentGrants = await db
+      .select()
+      .from(principalPermissionGrants)
+      .where(
+        and(
+          eq(principalPermissionGrants.companyId, company.id),
+          eq(principalPermissionGrants.principalId, owner.principalId),
+          eq(principalPermissionGrants.permissionKey, "environments:manage"),
+        ),
+      );
+    expect(ownerEnvironmentGrants).toHaveLength(1);
+    expect(ownerEnvironmentGrants[0]?.scope).toEqual(scopedEnvironmentGrant);
+    expect(ownerEnvironmentGrants[0]?.grantedByUserId).toBe("custom-author");
+  });
+
+  it("backfills non-terminal agents as active company members without reviving pending or terminated agents", async () => {
+    const { company } = await createCompanyWithOwner(db);
+    const agentRows = await db
+      .insert(agents)
+      .values([
+        {
+          companyId: company.id,
+          name: `Idle ${randomUUID()}`,
+          role: "engineer",
+          status: "idle",
+          adapterType: "process",
+          adapterConfig: {},
+          runtimeConfig: {},
+        },
+        {
+          companyId: company.id,
+          name: `Running ${randomUUID()}`,
+          role: "engineer",
+          status: "running",
+          adapterType: "process",
+          adapterConfig: {},
+          runtimeConfig: {},
+        },
+        {
+          companyId: company.id,
+          name: `Pending ${randomUUID()}`,
+          role: "engineer",
+          status: "pending_approval",
+          adapterType: "process",
+          adapterConfig: {},
+          runtimeConfig: {},
+        },
+        {
+          companyId: company.id,
+          name: `Terminated ${randomUUID()}`,
+          role: "engineer",
+          status: "terminated",
+          adapterType: "process",
+          adapterConfig: {},
+          runtimeConfig: {},
+        },
+      ])
+      .returning();
+    const idleAgent = agentRows[0]!;
+    const runningAgent = agentRows[1]!;
+    const pendingAgent = agentRows[2]!;
+    const terminatedAgent = agentRows[3]!;
+
+    const first = await backfillPrincipalAccessCompatibility(db);
+    const second = await backfillPrincipalAccessCompatibility(db);
+
+    expect(first.agentMembershipsInserted).toBe(2);
+    expect(second.agentMembershipsInserted).toBe(0);
+    const memberships = await db
+      .select()
+      .from(companyMemberships)
+      .where(eq(companyMemberships.principalType, "agent"));
+    expect(memberships.map((membership) => membership.principalId).sort()).toEqual([
+      idleAgent.id,
+      runningAgent.id,
+    ].sort());
+    expect(memberships.every((membership) => membership.status === "active")).toBe(true);
+    expect(memberships.every((membership) => membership.membershipRole === "member")).toBe(true);
+    expect(memberships.some((membership) => membership.principalId === pendingAgent.id)).toBe(false);
+    expect(memberships.some((membership) => membership.principalId === terminatedAgent.id)).toBe(false);
+  });
+
+  it("copies active user memberships with role-default grants for safe company imports", async () => {
+    const source = await createCompanyWithOwner(db);
+    const target = await createCompanyWithOwner(db);
+    const admin = await db
+      .insert(companyMemberships)
+      .values({
+        companyId: source.company.id,
+        principalType: "user",
+        principalId: `admin-${randomUUID()}`,
+        status: "active",
+        membershipRole: "admin",
+      })
+      .returning()
+      .then((rows) => rows[0]!);
+
+    const access = accessService(db);
+    await access.copyActiveUserMemberships(source.company.id, target.company.id);
+
+    const copiedOwnerGrants = await access.listPrincipalGrants(
+      target.company.id,
+      "user",
+      source.owner.principalId,
+    );
+    const copiedAdminGrants = await access.listPrincipalGrants(
+      target.company.id,
+      "user",
+      admin.principalId,
+    );
+    expect(copiedOwnerGrants.map((grant) => grant.permissionKey)).toEqual(
+      grantsForHumanRole("owner").map((grant) => grant.permissionKey).sort(),
+    );
+    expect(copiedAdminGrants.map((grant) => grant.permissionKey)).toEqual(
+      grantsForHumanRole("admin").map((grant) => grant.permissionKey).sort(),
+    );
   });
 
   it("preserves explicit scoped environment grants when backfilling owner and admin defaults", async () => {
