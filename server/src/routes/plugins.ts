@@ -161,6 +161,14 @@ const BUNDLED_PLUGIN_EXAMPLES: AvailablePluginExample[] = [
     tag: "first-party",
   },
   {
+    packageName: "@paperclipai/plugin-triage",
+    pluginKey: "paperclipai.plugin-triage",
+    displayName: "Paperclip Triage",
+    description: "First-party queue workbench for triaging arbitrary items with a teachable assistant.",
+    localPath: "packages/plugins/plugin-triage",
+    tag: "first-party",
+  },
+  {
     packageName: "@paperclipai/plugin-hello-world-example",
     pluginKey: "paperclip.hello-world-example",
     displayName: "Hello World Widget (Example)",

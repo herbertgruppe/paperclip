@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 
-import { act, createElement } from "react";
+import { createElement } from "react";
+import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
@@ -162,12 +163,12 @@ describe("ReflectionDiff", () => {
     root = createRoot(container);
   });
   afterEach(() => {
-    act(() => root.unmount());
+    flushSync(() => root.unmount());
     container.remove();
   });
 
   it("marks added, removed, and unchanged lines", () => {
-    act(() => {
+    flushSync(() => {
       root.render(
         createElement(ReflectionDiff, {
           baseContent: "Header\nKeep launch posts under 150 words.",
@@ -183,7 +184,7 @@ describe("ReflectionDiff", () => {
     expect(dels.length).toBe(0);
     expect(adds.map((node) => node.textContent?.trim()).join("\n")).toContain("Flag vague benefits before approving.");
 
-    act(() => {
+    flushSync(() => {
       root.render(
         createElement(ReflectionDiff, {
           baseContent: "Keep posts short.",
@@ -208,12 +209,12 @@ describe("SidebarLink", () => {
     root = createRoot(container);
   });
   afterEach(() => {
-    act(() => root.unmount());
+    flushSync(() => root.unmount());
     container.remove();
   });
 
   it("links to /triage with company-prefixed aria label", () => {
-    act(() => {
+    flushSync(() => {
       root.render(
         createElement(SidebarLink, {
           context: { companyId: COMPANY_ID, companyPrefix: "PAP", projectId: null, entityId: null, entityType: null, userId: null },
@@ -243,12 +244,12 @@ describe("TriageRouteSidebar", () => {
     root = createRoot(container);
   });
   afterEach(() => {
-    act(() => root.unmount());
+    flushSync(() => root.unmount());
     container.remove();
   });
 
   it("renders the queue list and highlights the active queue", () => {
-    act(() => {
+    flushSync(() => {
       root.render(
         createElement(TriageRouteSidebar, {
           context: { companyId: COMPANY_ID, companyPrefix: "PAP", projectId: null, entityId: null, entityType: null, userId: null },
@@ -281,12 +282,12 @@ describe("TriagePage — queue list home", () => {
     root = createRoot(container);
   });
   afterEach(() => {
-    act(() => root.unmount());
+    flushSync(() => root.unmount());
     container.remove();
   });
 
   it("shows the queue card with title, key, and item counts", () => {
-    act(() => {
+    flushSync(() => {
       root.render(createElement(TriagePage, PAGE_PROPS));
     });
     const text = container.textContent ?? "";
@@ -318,12 +319,12 @@ describe("TriagePage — queue overview lists items by state", () => {
     root = createRoot(container);
   });
   afterEach(() => {
-    act(() => root.unmount());
+    flushSync(() => root.unmount());
     container.remove();
   });
 
   it("groups items by state and links each item to the workbench", () => {
-    act(() => {
+    flushSync(() => {
       root.render(createElement(TriagePage, PAGE_PROPS));
     });
     const text = container.textContent ?? "";
@@ -390,12 +391,12 @@ describe("TriagePage — item workbench two-column layout", () => {
     root = createRoot(container);
   });
   afterEach(() => {
-    act(() => root.unmount());
+    flushSync(() => root.unmount());
     container.remove();
   });
 
   it("renders chat pane (center/left) and document pane (right) with transition buttons and an open proposal", () => {
-    act(() => {
+    flushSync(() => {
       root.render(createElement(TriagePage, PAGE_PROPS));
     });
 
@@ -468,12 +469,12 @@ describe("TriagePage — transition action editor", () => {
     root = createRoot(container);
   });
   afterEach(() => {
-    act(() => root.unmount());
+    flushSync(() => root.unmount());
     container.remove();
   });
 
   it("lists existing transition actions and their template fields", () => {
-    act(() => {
+    flushSync(() => {
       root.render(createElement(TriagePage, PAGE_PROPS));
     });
     const text = container.textContent ?? "";
@@ -508,12 +509,12 @@ describe("SettingsPage — managed resource panel", () => {
     root = createRoot(container);
   });
   afterEach(() => {
-    act(() => root.unmount());
+    flushSync(() => root.unmount());
     container.remove();
   });
 
   it("renders the managed resource health rows and reconcile button", () => {
-    act(() => {
+    flushSync(() => {
       root.render(
         createElement(SettingsPage, {
           context: { companyId: COMPANY_ID, companyPrefix: "PAP", projectId: null, entityId: null, entityType: null, userId: null },

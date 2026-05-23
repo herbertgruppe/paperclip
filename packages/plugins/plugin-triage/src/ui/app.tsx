@@ -490,22 +490,49 @@ function allowedTransitions(fromStateKey: string) {
 // Sidebar link slot.
 // ---------------------------------------------------------------------------
 
+const triageSidebarIcon = (
+  <svg
+    aria-hidden="true"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    style={{ width: 16, height: 16, display: "block", flexShrink: 0 }}
+  >
+    <path d="M8 6h13" />
+    <path d="M8 12h13" />
+    <path d="M8 18h13" />
+    <path d="M3 6h.01" />
+    <path d="M3 12h.01" />
+    <path d="M3 18h.01" />
+  </svg>
+);
+
 export function SidebarLink({ context }: PluginSidebarProps) {
   const nav = useHostNavigation();
+  const location = useHostLocation();
+  const active = location.pathname.split("/").filter(Boolean).includes("triage");
   return (
     <a
       {...nav.linkProps("/triage")}
       style={{
         color: "inherit",
         textDecoration: "none",
-        display: "block",
-        padding: "6px 8px",
-        borderRadius: 6,
-        fontSize: 14,
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        padding: "8px 12px",
+        fontSize: 13,
+        fontWeight: 500,
+        background: active ? tokens.accent : "transparent",
       }}
+      data-triage-sidebar-active={active ? "true" : "false"}
       aria-label={`Open Triage for ${context.companyPrefix ?? "company"}`}
     >
-      Triage
+      {triageSidebarIcon}
+      <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>Triage</span>
     </a>
   );
 }
