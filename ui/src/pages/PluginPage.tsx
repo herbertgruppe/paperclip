@@ -199,6 +199,11 @@ function titleFromRouteSplat(routeSplat: string | undefined): string | null {
     return titleFromPath(segments.slice(1).join("/"), { preserveCase: true });
   }
 
+  // Skip single- or two-character marker segments (e.g. "q" for queue, "i" for
+  // item) so the breadcrumb shows the named target rather than the marker.
+  if (segments[0] && segments[0].length <= 2 && segments[1]) {
+    return titleFromPath(segments[1], { preserveCase: true });
+  }
   return titleFromPath(segments[0] ?? null);
 }
 

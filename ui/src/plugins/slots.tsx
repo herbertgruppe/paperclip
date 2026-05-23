@@ -129,6 +129,41 @@ function buildRegistryKey(pluginKey: string, exportName: string): string {
   return `${pluginKey}:${exportName}`;
 }
 
+/**
+ * Listeners notified after a plugin module finishes loading (success or error).
+ * Keyed by `pluginKey` so each PluginSlotMount only re-renders when its plugin's
+ * registry entries are populated. Without this, StrictMode's double-invoke of
+ * `usePluginModuleLoader` cancels its `setTick` and the placeholder sticks.
+ */
+const moduleLoadListeners = new Map<string, Set<() => void>>();
+
+function subscribeToPluginModuleLoad(pluginKey: string, listener: () => void): () => void {
+  let listeners = moduleLoadListeners.get(pluginKey);
+  if (!listeners) {
+    listeners = new Set();
+    moduleLoadListeners.set(pluginKey, listeners);
+  }
+  listeners.add(listener);
+  return () => {
+    const set = moduleLoadListeners.get(pluginKey);
+    if (!set) return;
+    set.delete(listener);
+    if (set.size === 0) moduleLoadListeners.delete(pluginKey);
+  };
+}
+
+function notifyPluginModuleLoaded(pluginKey: string): void {
+  const listeners = moduleLoadListeners.get(pluginKey);
+  if (!listeners) return;
+  for (const listener of Array.from(listeners)) {
+    try {
+      listener();
+    } catch (err) {
+      console.error("Plugin module load listener threw", err);
+    }
+  }
+}
+
 function requiresEntityType(slotType: PluginUiSlotType): boolean {
   return slotType === "detailTab" || slotType === "taskDetailView" || slotType === "contextMenuItem" || slotType === "commentAnnotation" || slotType === "commentContextMenuItem" || slotType === "projectSidebarItem" || slotType === "toolbarButton";
 }
@@ -503,6 +538,7 @@ async function loadPluginModule(contribution: PluginUiContribution): Promise<voi
       console.error(`Failed to load UI module for plugin "${pluginKey}"`, err);
     } finally {
       inflightImports.delete(pluginId);
+      notifyPluginModuleLoaded(pluginKey);
     }
   })();
 
@@ -788,20 +824,15 @@ export function PluginSlotMount({
 
   useEffect(() => {
     if (component) return;
-    const inflight = inflightImports.get(slot.pluginId);
-    if (!inflight) return;
-
-    let cancelled = false;
-    void inflight.finally(() => {
-      if (!cancelled) {
-        forceRerender((tick) => tick + 1);
-      }
+    // Subscribe to module-load notifications for this plugin so we re-render
+    // when the registry is populated. Polling inflightImports alone is racy
+    // under StrictMode, which double-invokes the loader effect and cancels
+    // its setTick callback.
+    const unsubscribe = subscribeToPluginModuleLoad(slot.pluginKey, () => {
+      forceRerender((tick) => tick + 1);
     });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [component, slot.pluginId]);
+    return unsubscribe;
+  }, [component, slot.pluginKey]);
 
   if (!component) {
     if (missingBehavior === "hidden") return null;
