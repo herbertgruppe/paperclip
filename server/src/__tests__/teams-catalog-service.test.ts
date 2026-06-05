@@ -236,6 +236,20 @@ describe("teamsCatalogService", () => {
     expect(mockCompanySkillService.importFromSource).not.toHaveBeenCalled();
   });
 
+  it("surfaces post-import catalog skill install failures as warnings", async () => {
+    mockCompanySkillService.installFromCatalog.mockRejectedValueOnce(new Error("catalog unavailable"));
+    const svc = teamsCatalogService({} as any);
+
+    const result = await svc.installCatalogTeam("company-1", "core-exec-team");
+
+    expect(mockCompanyPortabilityService.importBundle).toHaveBeenCalled();
+    expect(result.warnings).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("catalog unavailable"),
+      ]),
+    );
+  });
+
   it("injects safe claude_local adapter defaults for every bundled agent when no overrides are supplied", async () => {
     const svc = teamsCatalogService({} as any);
 

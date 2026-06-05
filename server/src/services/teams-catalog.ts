@@ -258,6 +258,10 @@ export function readCatalogTeamProvenance(
   };
 }
 
+function formatError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export async function resolveCatalogTeamReference(reference: string): Promise<{ team: CatalogTeam | null; ambiguous: boolean }> {
   const trimmed = reference.trim();
   if (!trimmed) return { team: null, ambiguous: false };
@@ -864,20 +868,32 @@ export function teamsCatalogService(db: Db) {
     const warnings: string[] = [];
     for (const skill of prepared.skillPreparations) {
       if (skill.action === "blocked") {
-        throw unprocessable(skill.reason ?? `Catalog team skill source ${skill.ref} is blocked.`);
+        warnings.push(skill.reason ?? `Catalog team skill source ${skill.ref} is blocked.`);
+        continue;
       }
       if (skill.action === "catalog_install_required") {
-        if (!skill.catalogSkillId) throw unprocessable(`Catalog skill requirement ${skill.ref} is missing catalogSkillId.`);
-        const result = await companySkills.installFromCatalog(companyId, {
-          catalogSkillId: skill.catalogSkillId,
-        });
-        warnings.push(...result.warnings);
+        if (!skill.catalogSkillId) {
+          warnings.push(`Catalog skill requirement ${skill.ref} is missing catalogSkillId.`);
+          continue;
+        }
+        try {
+          const result = await companySkills.installFromCatalog(companyId, {
+            catalogSkillId: skill.catalogSkillId,
+          });
+          warnings.push(...result.warnings);
+        } catch (error) {
+          warnings.push(`Catalog skill requirement ${skill.ref} could not be installed after team import: ${formatError(error)}`);
+        }
         continue;
       }
       if (skill.action === "external_import_required") {
         const source = skill.sourceLocator ?? skill.ref;
-        const result = await companySkills.importFromSource(companyId, source);
-        warnings.push(...result.warnings);
+        try {
+          const result = await companySkills.importFromSource(companyId, source);
+          warnings.push(...result.warnings);
+        } catch (error) {
+          warnings.push(`External skill source ${source} could not be imported after team import: ${formatError(error)}`);
+        }
       }
     }
     return warnings;

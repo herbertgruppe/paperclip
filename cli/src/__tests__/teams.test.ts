@@ -330,8 +330,12 @@ describe("teams CLI commands", () => {
       "agents/cto/AGENTS.md",
       "--collision-strategy",
       "skip",
+      "--secret-value",
+      "agent:cto:OPENAI_API_KEY=sk-test",
+      "--adapter-override",
+      "cto=opencode_local",
       "--company-id",
-      "company-1",
+      "company/1",
       "--api-base",
       "http://paperclip.test",
       "--api-key",
@@ -340,13 +344,15 @@ describe("teams CLI commands", () => {
     ]);
 
     expect(fetchMock).toHaveBeenCalledWith(
-      "http://paperclip.test/api/companies/company-1/teams/catalog/ref/install?ref=product-engineering",
+      "http://paperclip.test/api/companies/company%2F1/teams/catalog/ref/install?ref=product-engineering",
       expect.objectContaining({
         method: "POST",
         body: JSON.stringify({
           agents: ["cto"],
           collisionStrategy: "skip",
           selectedFiles: ["agents/cto/AGENTS.md"],
+          adapterOverrides: { cto: { adapterType: "opencode_local" } },
+          secretValues: { "agent:cto:OPENAI_API_KEY": "sk-test" },
         }),
       }),
     );

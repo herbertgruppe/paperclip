@@ -45,6 +45,8 @@ interface TeamPreviewOptions extends BaseClientOptions {
 interface TeamInstallOptions extends TeamPreviewOptions {
   requestApprovalOnForbidden?: boolean;
   approvalIssueId?: string;
+  secretValue?: string[];
+  adapterOverride?: string[];
 }
 
 interface TeamInstallApprovalFallbackResult {
@@ -206,6 +208,8 @@ export function registerTeamCommands(program: Command): void {
       .option("--collision-strategy <strategy>", "Import collision strategy (rename, skip, replace)")
       .option("--name-override <slug=name>", "Override an imported entity name; may be repeated", collectOptionValue, [] as string[])
       .option("--selected-file <path>", "Restrict install to selected portable file; may be repeated", collectOptionValue, [] as string[])
+      .option("--secret-value <key=value>", "Secret env input value for install; may be repeated", collectOptionValue, [] as string[])
+      .option("--adapter-override <slug=type>", "Adapter type override for an imported agent slug; may be repeated", collectOptionValue, [] as string[])
       .option("--allow-external-sources", "Allow GitHub, URL, or skills.sh skill sources declared by the catalog team", false)
       .option("--allow-unpinned-optional-sources", "Allow optional-team external skill sources that are not pinned to a commit", false)
       .option("--allow-local-path-sources", "Development only: allow local-path skill sources declared by the catalog team", false)
@@ -342,7 +346,7 @@ async function getCatalogTeamFile(
 function catalogTeamCompanyPath(companyId: string | undefined, catalogRef: string, action: "preview" | "install") {
   if (!companyId) throw new Error("Company ID is required.");
   const params = new URLSearchParams({ ref: catalogRef.trim() });
-  return `/api/companies/${companyId}/teams/catalog/ref/${action}?${params.toString()}`;
+  return `/api/companies/${encodeURIComponent(companyId)}/teams/catalog/ref/${action}?${params.toString()}`;
 }
 
 function buildTeamOptions(opts: TeamPreviewOptions): CatalogTeamImportOptions {
@@ -358,7 +362,11 @@ function buildTeamOptions(opts: TeamPreviewOptions): CatalogTeamImportOptions {
 }
 
 function buildTeamInstallOptions(opts: TeamInstallOptions): CatalogTeamInstallOptions {
-  return buildTeamOptions(opts);
+  return removeUndefined({
+    ...buildTeamOptions(opts),
+    adapterOverrides: parseAdapterOverrides(opts.adapterOverride),
+    secretValues: parseSecretValues(opts.secretValue),
+  });
 }
 
 const INSTALL_APPROVAL_FALLBACK_MESSAGES = [
@@ -448,18 +456,49 @@ function parseNameOverrides(values: string[] | undefined): Record<string, string
   if (!values || values.length === 0) return undefined;
   const result: Record<string, string> = {};
   for (const raw of values) {
-    const separator = raw.indexOf("=");
-    if (separator <= 0) {
-      throw new Error(`Invalid --name-override "${raw}". Use slug=name.`);
-    }
-    const slug = raw.slice(0, separator).trim();
-    const name = raw.slice(separator + 1).trim();
+    const [slug, name] = parseKeyValueOption(raw, "--name-override", "slug=name");
     if (!slug || !name) {
       throw new Error(`Invalid --name-override "${raw}". Use slug=name.`);
     }
     result[slug] = name;
   }
   return result;
+}
+
+function parseSecretValues(values: string[] | undefined): Record<string, string> | undefined {
+  if (!values || values.length === 0) return undefined;
+  const result: Record<string, string> = {};
+  for (const raw of values) {
+    const [key, value] = parseKeyValueOption(raw, "--secret-value", "key=value");
+    if (!key) {
+      throw new Error(`Invalid --secret-value "${raw}". Use key=value.`);
+    }
+    result[key] = value;
+  }
+  return result;
+}
+
+function parseAdapterOverrides(
+  values: string[] | undefined,
+): CatalogTeamInstallOptions["adapterOverrides"] | undefined {
+  if (!values || values.length === 0) return undefined;
+  const result: NonNullable<CatalogTeamInstallOptions["adapterOverrides"]> = {};
+  for (const raw of values) {
+    const [slug, adapterType] = parseKeyValueOption(raw, "--adapter-override", "slug=type");
+    if (!slug || !adapterType) {
+      throw new Error(`Invalid --adapter-override "${raw}". Use slug=type.`);
+    }
+    result[slug] = { adapterType };
+  }
+  return result;
+}
+
+function parseKeyValueOption(raw: string, flag: string, format: string): [string, string] {
+  const separator = raw.indexOf("=");
+  if (separator <= 0) {
+    throw new Error(`Invalid ${flag} "${raw}". Use ${format}.`);
+  }
+  return [raw.slice(0, separator).trim(), raw.slice(separator + 1).trim()];
 }
 
 function removeUndefined<T extends Record<string, unknown>>(input: T): T {
