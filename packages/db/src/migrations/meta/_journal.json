@@ -666,6 +666,20 @@
       "when": 1780533900000,
       "tag": "0094_backfill_archived_company_agent_pauses",
       "breakpoints": true
+    },
+    {
+      "idx": 95,
+      "version": "7",
+      "when": 1780700756000,
+      "tag": "0095_tool_access_mcp_connections",
+      "breakpoints": true
+    },
+    {
+      "idx": 96,
+      "version": "7",
+      "when": 1780704000000,
+      "tag": "0096_agent_access_phase2_contracts",
+      "breakpoints": true
     }
   ]
 }
