@@ -6,7 +6,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { CompanySecret, ToolApplication, ToolConnection } from "@paperclipai/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ToastProvider } from "../../context/ToastContext";
-import { ConnectionsTab } from "./ConnectionsTab";
+import { ApplicationsTab } from "./ApplicationsTab";
 
 const mockToolsApi = vi.hoisted(() => ({
   listConnections: vi.fn(),
@@ -80,7 +80,7 @@ function makeApp(overrides: Partial<ToolApplication>): ToolApplication {
     id: "app-1",
     companyId: "company-1",
     name: "GitHub",
-    description: null,
+    description: "Issue triage MCP",
     type: "mcp_http",
     status: "active",
     pluginId: null,
@@ -119,7 +119,7 @@ function makeSecret(overrides: Partial<CompanySecret>): CompanySecret {
   };
 }
 
-describe("ConnectionsTab", () => {
+describe("ApplicationsTab", () => {
   let container: HTMLDivElement;
   let root: ReturnType<typeof createRoot> | null;
   let queryClient: QueryClient;
@@ -131,8 +131,10 @@ describe("ConnectionsTab", () => {
     queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
     });
+    mockToolsApi.listApplications.mockResolvedValue({
+      applications: [makeApp({}), makeApp({ id: "app-2", name: "Linear", description: null })],
+    });
     mockToolsApi.listConnections.mockResolvedValue({ connections: [makeConnection({})] });
-    mockToolsApi.listApplications.mockResolvedValue({ applications: [makeApp({})] });
     mockToolsApi.listCatalog.mockResolvedValue({
       catalog: [
         { id: "c1", toolName: "create_issue" },
@@ -148,6 +150,7 @@ describe("ConnectionsTab", () => {
       act(() => root!.unmount());
     }
     container.remove();
+    document.body.innerHTML = "";
     vi.clearAllMocks();
   });
 
@@ -157,7 +160,7 @@ describe("ConnectionsTab", () => {
       root.render(
         <QueryClientProvider client={queryClient}>
           <ToastProvider>
-            <ConnectionsTab companyId="company-1" />
+            <ApplicationsTab companyId="company-1" />
           </ToastProvider>
         </QueryClientProvider>,
       );
@@ -166,41 +169,57 @@ describe("ConnectionsTab", () => {
     await flushReact();
   }
 
-  it("renders a dense table with the endpoint, application, transport and catalog count", async () => {
+  it("renders applications as top-level rows and expands to connection actions", async () => {
     await render();
-    const table = container.querySelector("table");
-    expect(table).not.toBeNull();
-    const headers = Array.from(container.querySelectorAll("th")).map((th) => th.textContent);
-    expect(headers).toEqual(["Connection", "Application", "Transport", "Health", "Catalog", "Actions"]);
 
     const text = container.textContent ?? "";
-    expect(text).toContain("Production GitHub");
-    expect(text).toContain("https://mcp.github.example.com");
-    expect(text).toContain("GitHub"); // application column
-    expect(text).toContain("remote http"); // transport pill label
-    expect(text).toContain("2 tools"); // catalog count from listCatalog
-    expect(text).toContain("1 credential ref");
+    expect(text).toContain("Applications");
+    expect(text).toContain("GitHub");
+    expect(text).toContain("MCP HTTP");
+
+    const expand = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.getAttribute("aria-label") === "Expand GitHub",
+    );
+    expect(expand).toBeTruthy();
+    await act(() => {
+      expand!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flushReact();
+
+    const expandedText = container.textContent ?? "";
+    expect(expandedText).toContain("Production GitHub");
+    expect(expandedText).toContain("https://mcp.github.example.com");
+    expect(expandedText).toContain("remote http");
+    expect(expandedText).toContain("Probe");
+    expect(expandedText).toContain("Refresh");
+    expect(expandedText).toContain("Catalog");
+    expect(expandedText).toContain("Disable");
   });
 
-  it("opens the unified add wizard without offering free-text secrets", async () => {
+  it("opens the unified add wizard from an application row", async () => {
     await render();
-    const newBtn = Array.from(container.querySelectorAll("button")).find((b) =>
-      b.textContent?.includes("New connection"),
+
+    const expand = Array.from(container.querySelectorAll("button")).find(
+      (button) => button.getAttribute("aria-label") === "Expand Linear",
     );
-    expect(newBtn).toBeTruthy();
     await act(() => {
-      newBtn!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      expand!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    await flushReact();
+
+    const add = Array.from(container.querySelectorAll("button")).find((button) =>
+      button.textContent?.includes("Add connection"),
+    );
+    expect(add).toBeTruthy();
+    await act(() => {
+      add!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
     await flushReact();
 
     const body = document.body.textContent ?? "";
     expect(body).toContain("Add application");
-    expect(body).toContain("Use existing application");
-    // The dialog must NOT offer a free-text token/secret input.
-    const inputs = Array.from(document.querySelectorAll("input"));
-    const hasSecretValueField = inputs.some((i) =>
-      /token|secret value|password|api[- ]?key/i.test(`${i.getAttribute("placeholder") ?? ""} ${i.getAttribute("aria-label") ?? ""}`),
-    );
-    expect(hasSecretValueField).toBe(false);
+    expect(body).toContain("2 Connection");
+    expect(body).toContain("Credential references");
+    expect(body).toContain("Free-text secrets are not accepted");
   });
 });

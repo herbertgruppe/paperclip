@@ -115,6 +115,9 @@ describe("ToolsSidebar", () => {
       expect.objectContaining({ to: "/tools", label: "Overview", end: true }),
     );
     expect(sidebarNavItemMock).toHaveBeenCalledWith(
+      expect.objectContaining({ to: "/tools/applications", label: "Applications", end: true }),
+    );
+    expect(sidebarNavItemMock).not.toHaveBeenCalledWith(
       expect.objectContaining({ to: "/tools/connections", label: "Connections", end: true }),
     );
     expect(sidebarNavItemMock).toHaveBeenCalledWith(

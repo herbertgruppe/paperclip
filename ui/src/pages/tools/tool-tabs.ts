@@ -2,7 +2,6 @@ import {
   Activity,
   AppWindow,
   Layers,
-  Plug,
   ScrollText,
   Server,
   Shield,
@@ -12,7 +11,6 @@ import {
 export const TOOL_TABS = [
   { key: "overview", label: "Overview", icon: Activity },
   { key: "applications", label: "Applications", icon: AppWindow },
-  { key: "connections", label: "Connections", icon: Plug },
   { key: "profiles", label: "Profiles", icon: Layers },
   { key: "policies", label: "Policies", icon: Shield },
   { key: "runtime", label: "Runtime", icon: Server },

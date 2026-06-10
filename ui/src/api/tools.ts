@@ -73,7 +73,8 @@ export interface UpdateToolApplicationInput {
 }
 
 export interface CreateToolConnectionInput {
-  applicationId: string;
+  applicationId?: string;
+  applicationName?: string;
   name: string;
   transport: NonNullable<ToolConnection["transport"]>;
   status?: ToolConnection["status"];

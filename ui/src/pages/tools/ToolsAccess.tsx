@@ -1,11 +1,10 @@
 import { useEffect } from "react";
 import { ClipboardList } from "lucide-react";
-import { useParams } from "@/lib/router";
+import { Navigate, useParams } from "@/lib/router";
 import { useBreadcrumbs } from "@/context/BreadcrumbContext";
 import { useCompany } from "@/context/CompanyContext";
 import { OverviewTab } from "./OverviewTab";
 import { ApplicationsTab } from "./ApplicationsTab";
-import { ConnectionsTab } from "./ConnectionsTab";
 import { ProfilesTab } from "./ProfilesTab";
 import { PoliciesTab } from "./PoliciesTab";
 import { RuntimeTab } from "./RuntimeTab";
@@ -17,8 +16,6 @@ function renderTab(tab: ToolTabKey, companyId: string) {
   switch (tab) {
     case "applications":
       return <ApplicationsTab companyId={companyId} />;
-    case "connections":
-      return <ConnectionsTab companyId={companyId} />;
     case "profiles":
       return <ProfilesTab companyId={companyId} />;
     case "policies":
@@ -52,6 +49,8 @@ export function ToolsAccess() {
   if (!selectedCompanyId) {
     return <div className="p-6 text-sm text-muted-foreground">Select a company to manage tools &amp; access.</div>;
   }
+
+  if (params.tab === "connections") return <Navigate to="/tools/applications" replace />;
 
   return (
     <div className="mx-auto flex w-full max-w-6xl flex-col gap-5 p-4 sm:p-6">

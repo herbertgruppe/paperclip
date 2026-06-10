@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { KeyRound, ListTree, Plug, Plus, RefreshCw, Stethoscope, Trash2, Vault } from "lucide-react";
+import { KeyRound, ListTree, Plug, Plus, Power, RefreshCw, Stethoscope, Trash2, Vault } from "lucide-react";
 import type {
   CompanySecret,
   McpConnectionCredentialRef,
@@ -43,13 +43,13 @@ import {
   RelativeTime,
 } from "./shared";
 
-const TRANSPORT_LABEL: Record<string, string> = {
+export const TRANSPORT_LABEL: Record<string, string> = {
   remote_http: "remote http",
   local_stdio: "local stdio",
 };
 
 /** Mono URL (remote) or command-template (stdio) subtitle for a connection row. */
-function connectionEndpoint(conn: ToolConnection): string | null {
+export function connectionEndpoint(conn: ToolConnection): string | null {
   const config = { ...(conn.transportConfig ?? {}), ...(conn.config ?? {}) } as Record<string, unknown>;
   const url = config.url ?? config.endpoint ?? config.endpointUrl;
   if (typeof url === "string" && url.trim()) return url.trim();
@@ -72,7 +72,7 @@ function vaultRef(secret: CompanySecret | undefined, version: number | "latest" 
   return `vault://${secret.provider}/${secret.key}@${v}`;
 }
 
-function CatalogDialog({ connection, onClose }: { connection: ToolConnection; onClose: () => void }) {
+export function CatalogDialog({ connection, onClose }: { connection: ToolConnection; onClose: () => void }) {
   const catalog = useQuery({
     queryKey: queryKeys.tools.catalog(connection.id),
     queryFn: () => toolsApi.listCatalog(connection.id),
@@ -130,7 +130,15 @@ type ProbeResult = {
  * and runs a live gateway probe (health-check + catalog discovery) against the
  * draft before the operator activates it — per the Phase 0B spec surface map.
  */
-function NewConnectionDialog({ companyId, onClose }: { companyId: string; onClose: () => void }) {
+export function AddConnectionDialog({
+  companyId,
+  defaultApplicationId,
+  onClose,
+}: {
+  companyId: string;
+  defaultApplicationId?: string | null;
+  onClose: () => void;
+}) {
   const qc = useQueryClient();
   const { pushToast } = useToast();
 
@@ -147,7 +155,12 @@ function NewConnectionDialog({ companyId, onClose }: { companyId: string; onClos
     queryFn: () => toolsApi.listStdioTemplates(companyId),
   });
 
-  const [applicationId, setApplicationId] = useState("");
+  const [step, setStep] = useState<1 | 2>(defaultApplicationId ? 2 : 1);
+  const [applicationMode, setApplicationMode] = useState<"existing" | "new">(
+    "existing",
+  );
+  const [applicationId, setApplicationId] = useState(defaultApplicationId ?? "");
+  const [applicationName, setApplicationName] = useState("");
   const [name, setName] = useState("");
   const [transport, setTransport] = useState<"remote_http" | "local_stdio">("remote_http");
   const [endpointUrl, setEndpointUrl] = useState("");
@@ -201,7 +214,7 @@ function NewConnectionDialog({ companyId, onClose }: { companyId: string; onClos
       const config: Record<string, unknown> =
         transport === "remote_http" ? { url: endpointUrl.trim() } : { templateId };
       const input: CreateToolConnectionInput = {
-        applicationId,
+        ...(applicationMode === "existing" ? { applicationId } : { applicationName: applicationName.trim() }),
         name: name.trim(),
         transport,
         status: "draft",
@@ -241,6 +254,7 @@ function NewConnectionDialog({ companyId, onClose }: { companyId: string; onClos
     mutationFn: (id: string) => toolsApi.updateConnection(id, { status: "active", enabled: true }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: queryKeys.tools.connections(companyId) });
+      qc.invalidateQueries({ queryKey: queryKeys.tools.applications(companyId) });
       pushToast({ title: "Connection activated", tone: "success" });
       onClose();
     },
@@ -260,167 +274,218 @@ function NewConnectionDialog({ companyId, onClose }: { companyId: string; onClos
 
   const transportConfigValid =
     transport === "remote_http" ? endpointUrl.trim().length > 0 : templateId.length > 0;
-  const canCreate = !!applicationId && name.trim().length > 0 && transportConfigValid && !create.isPending;
+  const appChoiceValid = applicationMode === "existing" ? !!applicationId : applicationName.trim().length > 0;
+  const canCreate = appChoiceValid && name.trim().length > 0 && transportConfigValid && !create.isPending;
   const locked = !!draft;
+  const inferredType = transport === "remote_http" ? "MCP HTTP" : "MCP stdio";
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-w-xl">
         <DialogHeader>
-          <DialogTitle>New connection</DialogTitle>
+          <DialogTitle>Add application</DialogTitle>
           <DialogDescription>
-            Credentials are stored as secret references — Paperclip resolves them at gateway use time and never
-            exposes them to agents. The connection is created as a draft and probed before you activate it.
+            Choose an existing application or create one as part of the same connection flow. Credentials stay as
+            vault references and the connection is probed before activation.
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-3">
-          <div className="space-y-1.5">
-            <Label>Application</Label>
-            <Select value={applicationId} onValueChange={setApplicationId} disabled={locked}>
-              <SelectTrigger>
-                <SelectValue placeholder="Select an application" />
-              </SelectTrigger>
-              <SelectContent>
-                {(apps.data?.applications ?? []).map((a) => (
-                  <SelectItem key={a.id} value={a.id}>
-                    {a.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <span className={step === 1 ? "font-medium text-foreground" : ""}>1 Application</span>
+            <span>/</span>
+            <span className={step === 2 ? "font-medium text-foreground" : ""}>2 Connection</span>
           </div>
 
-          <div className="space-y-1.5">
-            <Label htmlFor="conn-name">Name</Label>
-            <Input
-              id="conn-name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. Production GitHub"
-              disabled={locked}
-            />
-          </div>
+          {step === 1 && !locked ? (
+            <>
+              <div className="space-y-1.5">
+                <Label>Application</Label>
+                <Select value={applicationMode} onValueChange={(v) => setApplicationMode(v as "existing" | "new")}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="existing">Use existing application</SelectItem>
+                    <SelectItem value="new">Create new application</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
 
-          <div className="space-y-1.5">
-            <Label>Transport</Label>
-            <Select
-              value={transport}
-              onValueChange={(v) => setTransport(v as "remote_http" | "local_stdio")}
-              disabled={locked}
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="remote_http">Remote HTTP (no local process)</SelectItem>
-                <SelectItem value="local_stdio">Local stdio (approved template)</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-
-          {transport === "remote_http" ? (
-            <div className="space-y-1.5">
-              <Label htmlFor="conn-url">Endpoint URL</Label>
-              <Input
-                id="conn-url"
-                value={endpointUrl}
-                onChange={(e) => setEndpointUrl(e.target.value)}
-                placeholder="https://mcp.example.com"
-                disabled={locked}
-              />
-            </div>
-          ) : (
-            <div className="space-y-1.5">
-              <Label>Command template</Label>
-              <Select value={templateId} onValueChange={setTemplateId} disabled={locked}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Select an approved template" />
-                </SelectTrigger>
-                <SelectContent>
-                  {(templates.data?.templates ?? []).map((t) => (
-                    <SelectItem key={t.templateId} value={t.templateId}>
-                      {t.title ?? t.templateId}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-muted-foreground">
-                Only board-approved command templates can run. Arbitrary commands are never accepted.
-              </p>
-            </div>
-          )}
-
-          {/* Vault-reference credential picker — no free-text token field. */}
-          <div className="space-y-1.5">
-            <Label>Credential references</Label>
-            {creds.length > 0 ? (
-              <ul className="space-y-1">
-                {creds.map((c, i) => (
-                  <li
-                    key={`${c.secretId}-${i}`}
-                    className="flex items-center gap-2 rounded-md border border-border bg-muted/30 px-2 py-1.5 text-sm"
-                  >
-                    <KeyRound className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                    <span className="font-mono text-xs">{c.headerName}</span>
-                    <span className="truncate font-mono text-xs text-primary" title={vaultRef(secretById(c.secretId))}>
-                      → {vaultRef(secretById(c.secretId))}
-                    </span>
-                    {!locked ? (
-                      <button
-                        type="button"
-                        className="ml-auto text-muted-foreground hover:text-destructive"
-                        onClick={() => setCreds((cs) => cs.filter((_, idx) => idx !== i))}
-                        aria-label={`Remove credential reference for ${secretName(c.secretId)}`}
-                      >
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </button>
-                    ) : null}
-                  </li>
-                ))}
-              </ul>
-            ) : null}
-            {!locked ? (
-              <>
-                <div className="flex items-end gap-2">
-                  <div className="flex-1 space-y-1">
-                    <Select value={pendingSecretId} onValueChange={setPendingSecretId}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select a vault secret" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {(secrets.data ?? []).map((s) => (
-                          <SelectItem key={s.id} value={s.id}>
-                            {s.name}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <Input
-                    value={pendingHeader}
-                    onChange={(e) => setPendingHeader(e.target.value)}
-                    placeholder="Header"
-                    className="w-32"
-                    aria-label="Header name"
-                  />
-                  <Button type="button" size="sm" variant="outline" onClick={addCred} disabled={!pendingSecretId}>
-                    Add
-                  </Button>
+              {applicationMode === "existing" ? (
+                <div className="space-y-1.5">
+                  <Label>Existing application</Label>
+                  <Select value={applicationId} onValueChange={setApplicationId}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select an application" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {(apps.data?.applications ?? []).map((a) => (
+                        <SelectItem key={a.id} value={a.id}>
+                          {a.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
-                {pendingSecretId ? (
-                  <p className="flex items-center gap-1.5 font-mono text-xs text-muted-foreground">
-                    <Vault className="h-3 w-3" />
-                    {vaultRef(secretById(pendingSecretId))}
+              ) : (
+                <div className="space-y-1.5">
+                  <Label htmlFor="app-name">New application name</Label>
+                  <Input
+                    id="app-name"
+                    value={applicationName}
+                    onChange={(e) => setApplicationName(e.target.value)}
+                    placeholder="e.g. GitHub Triage"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Application type is inferred from the transport you choose next.
                   </p>
+                </div>
+              )}
+            </>
+          ) : null}
+
+          {step === 2 || locked ? (
+            <>
+              {applicationMode === "new" ? (
+                <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
+                  <span className="font-medium text-foreground">{applicationName.trim()}</span> will be created as{" "}
+                  {inferredType}.
+                </div>
+              ) : null}
+
+              <div className="space-y-1.5">
+                <Label htmlFor="conn-name">Connection name</Label>
+                <Input
+                  id="conn-name"
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="e.g. Production GitHub"
+                  disabled={locked}
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label>Transport</Label>
+                <Select
+                  value={transport}
+                  onValueChange={(v) => setTransport(v as "remote_http" | "local_stdio")}
+                  disabled={locked}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="remote_http">Remote HTTP (no local process)</SelectItem>
+                    <SelectItem value="local_stdio">Local stdio (approved template)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {transport === "remote_http" ? (
+                <div className="space-y-1.5">
+                  <Label htmlFor="conn-url">Endpoint URL</Label>
+                  <Input
+                    id="conn-url"
+                    value={endpointUrl}
+                    onChange={(e) => setEndpointUrl(e.target.value)}
+                    placeholder="https://mcp.example.com"
+                    disabled={locked}
+                  />
+                </div>
+              ) : (
+                <div className="space-y-1.5">
+                  <Label>Command template</Label>
+                  <Select value={templateId} onValueChange={setTemplateId} disabled={locked}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select an approved template" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {(templates.data?.templates ?? []).map((t) => (
+                        <SelectItem key={t.templateId} value={t.templateId}>
+                          {t.title ?? t.templateId}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    Only board-approved command templates can run. Arbitrary commands are never accepted.
+                  </p>
+                </div>
+              )}
+
+              {/* Vault-reference credential picker — no free-text token field. */}
+              <div className="space-y-1.5">
+                <Label>Credential references</Label>
+                {creds.length > 0 ? (
+                  <ul className="space-y-1">
+                    {creds.map((c, i) => (
+                      <li
+                        key={`${c.secretId}-${i}`}
+                        className="flex items-center gap-2 rounded-md border border-border bg-muted/30 px-2 py-1.5 text-sm"
+                      >
+                        <KeyRound className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                        <span className="font-mono text-xs">{c.headerName}</span>
+                        <span className="truncate font-mono text-xs text-primary" title={vaultRef(secretById(c.secretId))}>
+                          → {vaultRef(secretById(c.secretId))}
+                        </span>
+                        {!locked ? (
+                          <button
+                            type="button"
+                            className="ml-auto text-muted-foreground hover:text-destructive"
+                            onClick={() => setCreds((cs) => cs.filter((_, idx) => idx !== i))}
+                            aria-label={`Remove credential reference for ${secretName(c.secretId)}`}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        ) : null}
+                      </li>
+                    ))}
+                  </ul>
                 ) : null}
-                <p className="text-xs text-muted-foreground">
-                  Free-text secrets are not accepted — pick a vault entry; Paperclip stores only the
-                  <span className="font-mono"> vault://</span> reference and resolves it at gateway use time.
-                </p>
-              </>
-            ) : null}
-          </div>
+                {!locked ? (
+                  <>
+                    <div className="flex items-end gap-2">
+                      <div className="flex-1 space-y-1">
+                        <Select value={pendingSecretId} onValueChange={setPendingSecretId}>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select a vault secret" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {(secrets.data ?? []).map((s) => (
+                              <SelectItem key={s.id} value={s.id}>
+                                {s.name}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <Input
+                        value={pendingHeader}
+                        onChange={(e) => setPendingHeader(e.target.value)}
+                        placeholder="Header"
+                        className="w-32"
+                        aria-label="Header name"
+                      />
+                      <Button type="button" size="sm" variant="outline" onClick={addCred} disabled={!pendingSecretId}>
+                        Add
+                      </Button>
+                    </div>
+                    {pendingSecretId ? (
+                      <p className="flex items-center gap-1.5 font-mono text-xs text-muted-foreground">
+                        <Vault className="h-3 w-3" />
+                        {vaultRef(secretById(pendingSecretId))}
+                      </p>
+                    ) : null}
+                    <p className="text-xs text-muted-foreground">
+                      Free-text secrets are not accepted — pick a vault entry; Paperclip stores only the
+                      <span className="font-mono"> vault://</span> reference and resolves it at gateway use time.
+                    </p>
+                  </>
+                ) : null}
+              </div>
+            </>
+          ) : null}
 
           {/* Inline probe panel — runs before activation, follows the Loading/Error rhythm. */}
           {locked ? (
@@ -475,10 +540,19 @@ function NewConnectionDialog({ companyId, onClose }: { companyId: string; onClos
           <Button variant="outline" onClick={onClose}>
             Cancel
           </Button>
-          {!locked ? (
-            <Button disabled={!canCreate} onClick={() => create.mutate()}>
-              {create.isPending ? "Creating draft…" : "Create & probe"}
+          {step === 1 && !locked ? (
+            <Button disabled={!appChoiceValid} onClick={() => setStep(2)}>
+              Continue
             </Button>
+          ) : !locked ? (
+            <>
+              <Button variant="outline" onClick={() => setStep(1)}>
+                Back
+              </Button>
+              <Button disabled={!canCreate} onClick={() => create.mutate()}>
+                {create.isPending ? "Creating draft…" : "Create & probe"}
+              </Button>
+            </>
           ) : (
             <>
               <Button variant="outline" disabled={probe.isPending} onClick={() => draft && probe.mutate(draft.id)}>
@@ -494,6 +568,10 @@ function NewConnectionDialog({ companyId, onClose }: { companyId: string; onClos
       </DialogContent>
     </Dialog>
   );
+}
+
+function NewConnectionDialog(props: { companyId: string; onClose: () => void }) {
+  return <AddConnectionDialog {...props} />;
 }
 
 export function ConnectionsTab({ companyId }: { companyId: string }) {
@@ -575,6 +653,23 @@ export function ConnectionsTab({ companyId }: { companyId: string }) {
     onError: (err) =>
       pushToast({
         title: "Catalog refresh failed",
+        body: err instanceof ApiError ? err.message : String(err),
+        tone: "error",
+      }),
+  });
+
+  const toggleEnabled = useMutation({
+    mutationFn: (conn: ToolConnection) => toolsApi.updateConnection(conn.id, { enabled: !conn.enabled }),
+    onSuccess: (conn) => {
+      invalidate();
+      pushToast({
+        title: conn.enabled ? "Connection enabled" : "Connection disabled",
+        tone: "success",
+      });
+    },
+    onError: (err) =>
+      pushToast({
+        title: "Could not update connection",
         body: err instanceof ApiError ? err.message : String(err),
         tone: "error",
       }),
@@ -692,6 +787,15 @@ export function ConnectionsTab({ companyId }: { companyId: string }) {
                           <Button size="sm" variant="outline" onClick={() => setCatalogFor(conn)}>
                             <ListTree className="mr-1 h-3.5 w-3.5" />
                             Tools
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={toggleEnabled.isPending}
+                            onClick={() => toggleEnabled.mutate(conn)}
+                          >
+                            <Power className="mr-1 h-3.5 w-3.5" />
+                            {conn.enabled ? "Disable" : "Enable"}
                           </Button>
                         </div>
                       </td>

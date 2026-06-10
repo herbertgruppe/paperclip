@@ -119,7 +119,7 @@ export function OverviewTab({ companyId }: { companyId: string }) {
             label="Active connections"
             value={activeConnections}
             description={`${activeConnections} of ${connList.length} enabled`}
-            to="/tools/connections"
+            to="/tools/applications"
           />
         </Card>
         <Card className="overflow-hidden py-0">

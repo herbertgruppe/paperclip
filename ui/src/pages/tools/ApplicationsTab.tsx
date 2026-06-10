@@ -1,23 +1,30 @@
-import { useMemo, useState } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AppWindow, Boxes, Globe, Network, Plus, Terminal, Upload, type LucideIcon } from "lucide-react";
-import type { ToolApplication, ToolApplicationType } from "@paperclipai/shared";
+import {
+  AppWindow,
+  Boxes,
+  ChevronDown,
+  ChevronRight,
+  Globe,
+  ListTree,
+  Network,
+  Plug,
+  Plus,
+  Power,
+  RefreshCw,
+  Stethoscope,
+  Terminal,
+  Upload,
+  type LucideIcon,
+} from "lucide-react";
+import type { ToolApplication, ToolApplicationType, ToolConnection } from "@paperclipai/shared";
 import { queryKeys } from "@/lib/queryKeys";
-import { toolsApi, type CreateToolApplicationInput } from "@/api/tools";
+import { toolsApi } from "@/api/tools";
 import { ApiError } from "@/api/client";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import {
   Select,
   SelectContent,
@@ -28,13 +35,8 @@ import {
 import { useToast } from "@/context/ToastContext";
 import { EmptyState } from "@/components/EmptyState";
 import { cn } from "@/lib/utils";
-import { ToolsPageHeader, LoadingState, ErrorState, RelativeTime } from "./shared";
-
-const APP_TYPES: { value: ToolApplicationType; label: string }[] = [
-  { value: "mcp_http", label: "MCP server (remote HTTP)" },
-  { value: "mcp_stdio", label: "MCP server (local stdio)" },
-  { value: "paperclip_plugin", label: "Paperclip plugin tools" },
-];
+import { ToolsPageHeader, LoadingState, ErrorState, HealthBadge, RelativeTime } from "./shared";
+import { AddConnectionDialog, CatalogDialog, TRANSPORT_LABEL, connectionEndpoint } from "./ConnectionsTab";
 
 const TYPE_FILTERS: { value: string; label: string }[] = [
   { value: "__all", label: "All types" },
@@ -95,9 +97,9 @@ export function ApplicationsTab({ companyId }: { companyId: string }) {
   const qc = useQueryClient();
   const { pushToast } = useToast();
   const [open, setOpen] = useState(false);
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  const [type, setType] = useState<ToolApplicationType>("mcp_http");
+  const [defaultApplicationId, setDefaultApplicationId] = useState<string | null>(null);
+  const [expandedAppId, setExpandedAppId] = useState<string | null>(null);
+  const [catalogFor, setCatalogFor] = useState<ToolConnection | null>(null);
 
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState("__all");
@@ -113,11 +115,15 @@ export function ApplicationsTab({ companyId }: { companyId: string }) {
   });
 
   const connList = connections.data?.connections ?? [];
+  const visibleConnList = useMemo(
+    () => connList.filter((c) => (c.status ?? "active") !== "archived"),
+    [connList],
+  );
 
   // Per-connection catalog counts let us show a real "tools" total per app
   // without inventing a company-wide aggregate endpoint.
   const catalogs = useQueries({
-    queries: connList.map((c) => ({
+    queries: visibleConnList.map((c) => ({
       queryKey: queryKeys.tools.catalog(c.id),
       queryFn: () => toolsApi.listCatalog(c.id),
       staleTime: 60_000,
@@ -126,36 +132,85 @@ export function ApplicationsTab({ companyId }: { companyId: string }) {
 
   const toolCountByApp = useMemo(() => {
     const counts = new Map<string, number>();
-    connList.forEach((c, i) => {
+    visibleConnList.forEach((c, i) => {
       const n = catalogs[i]?.data?.catalog?.length ?? 0;
       counts.set(c.applicationId, (counts.get(c.applicationId) ?? 0) + n);
     });
     return counts;
-  }, [connList, catalogs]);
+  }, [visibleConnList, catalogs]);
 
   const connCountByApp = useMemo(() => {
     const counts = new Map<string, number>();
-    connList.forEach((c) => counts.set(c.applicationId, (counts.get(c.applicationId) ?? 0) + 1));
+    visibleConnList.forEach((c) => counts.set(c.applicationId, (counts.get(c.applicationId) ?? 0) + 1));
     return counts;
-  }, [connList]);
+  }, [visibleConnList]);
 
-  const create = useMutation({
-    mutationFn: (input: CreateToolApplicationInput) => toolsApi.createApplication(companyId, input),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: queryKeys.tools.applications(companyId) });
-      setOpen(false);
-      setName("");
-      setDescription("");
-      setType("mcp_http");
-      pushToast({ title: "Application created", tone: "success" });
-    },
-    onError: (err) => {
+  const connectionsByApp = useMemo(() => {
+    const map = new Map<string, ToolConnection[]>();
+    visibleConnList.forEach((c) => map.set(c.applicationId, [...(map.get(c.applicationId) ?? []), c]));
+    return map;
+  }, [visibleConnList]);
+
+  const catalogCountByConn = useMemo(() => {
+    const counts = new Map<string, number | null>();
+    visibleConnList.forEach((c, i) => counts.set(c.id, catalogs[i]?.data ? catalogs[i].data.catalog.length : null));
+    return counts;
+  }, [visibleConnList, catalogs]);
+
+  const invalidateConnections = () => qc.invalidateQueries({ queryKey: queryKeys.tools.connections(companyId) });
+
+  const healthCheck = useMutation({
+    mutationFn: (id: string) => toolsApi.checkConnectionHealth(id),
+    onSuccess: (res) => {
+      invalidateConnections();
       pushToast({
-        title: "Could not create application",
-        body: err instanceof ApiError ? err.message : String(err),
-        tone: "error",
+        title: `Health: ${res.connection.healthStatus}`,
+        body: res.connection.healthMessage ?? undefined,
+        tone: res.connection.healthStatus === "error" ? "error" : "success",
       });
     },
+    onError: (err) =>
+      pushToast({
+        title: "Health check failed",
+        body: err instanceof ApiError ? err.message : String(err),
+        tone: "error",
+      }),
+  });
+
+  const refresh = useMutation({
+    mutationFn: (id: string) => toolsApi.refreshCatalog(id),
+    onSuccess: (res) => {
+      invalidateConnections();
+      qc.invalidateQueries({ queryKey: queryKeys.tools.catalog(res.connection.id) });
+      pushToast({
+        title: `Discovered ${res.discoveredCount} tools`,
+        body: res.quarantinedCount > 0 ? `${res.quarantinedCount} quarantined for review` : undefined,
+        tone: "success",
+      });
+    },
+    onError: (err) =>
+      pushToast({
+        title: "Catalog refresh failed",
+        body: err instanceof ApiError ? err.message : String(err),
+        tone: "error",
+      }),
+  });
+
+  const toggleEnabled = useMutation({
+    mutationFn: (conn: ToolConnection) => toolsApi.updateConnection(conn.id, { enabled: !conn.enabled }),
+    onSuccess: (conn) => {
+      invalidateConnections();
+      pushToast({
+        title: conn.enabled ? "Connection enabled" : "Connection disabled",
+        tone: "success",
+      });
+    },
+    onError: (err) =>
+      pushToast({
+        title: "Could not update connection",
+        body: err instanceof ApiError ? err.message : String(err),
+        tone: "error",
+      }),
   });
 
   const filtered = useMemo(() => {
@@ -182,7 +237,7 @@ export function ApplicationsTab({ companyId }: { companyId: string }) {
     <div className="space-y-4">
       <ToolsPageHeader
         title="Applications"
-        description="External tool sources: MCP servers and Paperclip plugin tool bundles. Add a connection to each application to discover its tools."
+        description="External tool sources and their managed MCP connections. Expand an application to test, refresh, enable, or inspect its tools."
         actions={
           <>
             <Button
@@ -191,7 +246,7 @@ export function ApplicationsTab({ companyId }: { companyId: string }) {
               onClick={() =>
                 pushToast({
                   title: "Import manifest",
-                  body: "Paste-an-mcp.json import is wired to the existing import endpoint in a follow-up. Use New application for now.",
+                  body: "Paste-an-mcp.json import is wired to the existing import endpoint in a follow-up. Use Add for now.",
                   tone: "info",
                 })
               }
@@ -199,9 +254,15 @@ export function ApplicationsTab({ companyId }: { companyId: string }) {
               <Upload className="mr-1 h-4 w-4" />
               Import manifest
             </Button>
-            <Button size="sm" onClick={() => setOpen(true)}>
+            <Button
+              size="sm"
+              onClick={() => {
+                setDefaultApplicationId(null);
+                setOpen(true);
+              }}
+            >
               <Plus className="mr-1 h-4 w-4" />
-              New application
+              Add
             </Button>
           </>
         }
@@ -211,9 +272,12 @@ export function ApplicationsTab({ companyId }: { companyId: string }) {
         <EmptyState
           icon={AppWindow}
           message="No applications yet"
-          description="Register an MCP server or plugin tool bundle to start governing tool access."
-          action="New application"
-          onAction={() => setOpen(true)}
+          description="Add an MCP connection to create or attach an application and start governing tool access."
+          action="Add application"
+          onAction={() => {
+            setDefaultApplicationId(null);
+            setOpen(true);
+          }}
         />
       ) : (
         <>
@@ -255,6 +319,7 @@ export function ApplicationsTab({ companyId }: { companyId: string }) {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-border text-left text-xs text-muted-foreground">
+                    <th className="w-8 px-2 py-2.5 font-medium" aria-label="Expand" />
                     <th className="px-4 py-2.5 font-medium">Application</th>
                     <th className="px-3 py-2.5 font-medium">Type</th>
                     <th className="px-3 py-2.5 text-right font-medium">Tools</th>
@@ -264,39 +329,157 @@ export function ApplicationsTab({ companyId }: { companyId: string }) {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
-                  {filtered.map((app) => (
-                    <tr key={app.id} className="align-top">
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-3">
-                          <AppIcon type={app.type} />
-                          <div className="min-w-0">
-                            <div className="font-medium text-foreground">{app.name}</div>
-                            {app.description ? (
-                              <div className="truncate text-xs text-muted-foreground">{app.description}</div>
-                            ) : null}
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-3 py-3">
-                        <Badge variant="outline">{typeLabel(app.type)}</Badge>
-                      </td>
-                      <td className="px-3 py-3 text-right font-mono text-xs text-foreground">
-                        {toolCountByApp.get(app.id) ?? 0}
-                      </td>
-                      <td className="px-3 py-3 text-right font-mono text-xs text-foreground">
-                        {connCountByApp.get(app.id) ?? 0}
-                      </td>
-                      <td className="px-3 py-3">
-                        <Badge variant={statusVariant(app.status)}>{app.status}</Badge>
-                      </td>
-                      <td className="px-4 py-3 text-right text-xs">
-                        <RelativeTime value={app.updatedAt} />
-                      </td>
-                    </tr>
-                  ))}
+                  {filtered.map((app) => {
+                    const appConnections = connectionsByApp.get(app.id) ?? [];
+                    const isExpanded = expandedAppId === app.id;
+                    return (
+                      <Fragment key={app.id}>
+                        <tr className="align-top">
+                          <td className="px-2 py-3">
+                            <Button
+                              size="icon"
+                              variant="ghost"
+                              className="h-7 w-7"
+                              aria-label={`${isExpanded ? "Collapse" : "Expand"} ${app.name}`}
+                              onClick={() => setExpandedAppId(isExpanded ? null : app.id)}
+                            >
+                              {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                            </Button>
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="flex items-center gap-3">
+                              <AppIcon type={app.type} />
+                              <div className="min-w-0">
+                                <div className="font-medium text-foreground">{app.name}</div>
+                                {app.description ? (
+                                  <div className="truncate text-xs text-muted-foreground">{app.description}</div>
+                                ) : null}
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-3 py-3">
+                            <Badge variant="outline">{typeLabel(app.type)}</Badge>
+                          </td>
+                          <td className="px-3 py-3 text-right font-mono text-xs text-foreground">
+                            {toolCountByApp.get(app.id) ?? 0}
+                          </td>
+                          <td className="px-3 py-3 text-right font-mono text-xs text-foreground">
+                            {connCountByApp.get(app.id) ?? 0}
+                          </td>
+                          <td className="px-3 py-3">
+                            <Badge variant={statusVariant(app.status)}>{app.status}</Badge>
+                          </td>
+                          <td className="px-4 py-3 text-right text-xs">
+                            <RelativeTime value={app.updatedAt} />
+                          </td>
+                        </tr>
+                        {isExpanded ? (
+                          <tr className="bg-muted/20">
+                            <td className="px-2 py-2" />
+                            <td colSpan={6} className="px-4 py-3">
+                              {appConnections.length === 0 ? (
+                                <div className="flex items-center justify-between gap-3 py-1 text-sm">
+                                  <div className="flex items-center gap-2 text-muted-foreground">
+                                    <Plug className="h-4 w-4" />
+                                    No connections for this application yet.
+                                  </div>
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => {
+                                      setDefaultApplicationId(app.id);
+                                      setOpen(true);
+                                    }}
+                                  >
+                                    <Plus className="mr-1 h-3.5 w-3.5" />
+                                    Add connection
+                                  </Button>
+                                </div>
+                              ) : (
+                                <div className="divide-y divide-border">
+                                  {appConnections.map((conn) => {
+                                    const endpoint = connectionEndpoint(conn);
+                                    const catalogCount = catalogCountByConn.get(conn.id);
+                                    return (
+                                      <div
+                                        key={conn.id}
+                                        className="grid grid-cols-[minmax(12rem,1.5fr)_8rem_8rem_8rem_minmax(18rem,auto)] items-center gap-3 py-2 text-sm"
+                                      >
+                                        <div className="flex min-w-0 items-start gap-2">
+                                          <Plug className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                                          <div className="min-w-0">
+                                            <div className="flex items-center gap-2">
+                                              <span className="font-medium text-foreground">{conn.name}</span>
+                                              {!conn.enabled ? <Badge variant="outline">disabled</Badge> : null}
+                                              {conn.status === "draft" ? <Badge variant="outline">draft</Badge> : null}
+                                            </div>
+                                            {endpoint ? (
+                                              <div className="truncate font-mono text-xs text-muted-foreground" title={endpoint}>
+                                                {endpoint}
+                                              </div>
+                                            ) : null}
+                                          </div>
+                                        </div>
+                                        <Badge variant="outline" className="w-fit">
+                                          {TRANSPORT_LABEL[conn.transport ?? ""] ?? conn.transport ?? "-"}
+                                        </Badge>
+                                        <HealthBadge status={conn.healthStatus} />
+                                        <div className="text-xs text-muted-foreground">
+                                          <span className="font-medium tabular-nums text-foreground">
+                                            {catalogCount == null ? "-" : catalogCount}
+                                          </span>{" "}
+                                          tools
+                                          <div className="text-[11px]">
+                                            refreshed <RelativeTime value={conn.lastCatalogRefreshAt ?? conn.updatedAt} />
+                                          </div>
+                                        </div>
+                                        <div className="flex justify-end gap-1.5">
+                                          <Button
+                                            size="sm"
+                                            variant="outline"
+                                            disabled={healthCheck.isPending}
+                                            onClick={() => healthCheck.mutate(conn.id)}
+                                          >
+                                            <Stethoscope className="mr-1 h-3.5 w-3.5" />
+                                            Probe
+                                          </Button>
+                                          <Button
+                                            size="sm"
+                                            variant="outline"
+                                            disabled={refresh.isPending}
+                                            onClick={() => refresh.mutate(conn.id)}
+                                          >
+                                            <RefreshCw className="mr-1 h-3.5 w-3.5" />
+                                            Refresh
+                                          </Button>
+                                          <Button size="sm" variant="outline" onClick={() => setCatalogFor(conn)}>
+                                            <ListTree className="mr-1 h-3.5 w-3.5" />
+                                            Catalog
+                                          </Button>
+                                          <Button
+                                            size="sm"
+                                            variant="outline"
+                                            disabled={toggleEnabled.isPending}
+                                            onClick={() => toggleEnabled.mutate(conn)}
+                                          >
+                                            <Power className="mr-1 h-3.5 w-3.5" />
+                                            {conn.enabled ? "Disable" : "Enable"}
+                                          </Button>
+                                        </div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                        ) : null}
+                      </Fragment>
+                    );
+                  })}
                   {filtered.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="px-4 py-8 text-center text-sm text-muted-foreground">
+                      <td colSpan={7} className="px-4 py-8 text-center text-sm text-muted-foreground">
                         No applications match the current filters.
                       </td>
                     </tr>
@@ -308,68 +491,14 @@ export function ApplicationsTab({ companyId }: { companyId: string }) {
         </>
       )}
 
-      <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>New application</DialogTitle>
-            <DialogDescription>
-              Define a tool source. You will add a connection (credentials + transport) next.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-3">
-            <div className="space-y-1.5">
-              <Label htmlFor="app-name">Name</Label>
-              <Input
-                id="app-name"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="e.g. GitHub Triage"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="app-desc">Description</Label>
-              <Input
-                id="app-desc"
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                placeholder="Optional"
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label>Type</Label>
-              <Select value={type} onValueChange={(v) => setType(v as ToolApplicationType)}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {APP_TYPES.map((t) => (
-                    <SelectItem key={t.value} value={t.value}>
-                      {t.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setOpen(false)}>
-              Cancel
-            </Button>
-            <Button
-              disabled={!name.trim() || create.isPending}
-              onClick={() =>
-                create.mutate({
-                  name: name.trim(),
-                  description: description.trim() || null,
-                  type,
-                })
-              }
-            >
-              {create.isPending ? "Creating…" : "Create"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {catalogFor ? <CatalogDialog connection={catalogFor} onClose={() => setCatalogFor(null)} /> : null}
+      {open ? (
+        <AddConnectionDialog
+          companyId={companyId}
+          defaultApplicationId={defaultApplicationId}
+          onClose={() => setOpen(false)}
+        />
+      ) : null}
     </div>
   );
 }
