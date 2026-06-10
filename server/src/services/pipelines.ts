@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { and, asc, desc, eq, inArray, isNull, ne, or, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import type { Db } from "@paperclipai/db";
@@ -588,6 +589,53 @@ async function handleBlockersResolved(db: PipelineDb, companyId: string, blocker
   }
 }
 
+async function notifyDependentWorkIssuesOfUpstreamContentChange(
+  db: PipelineDb,
+  input: {
+    companyId: string;
+    upstreamCase: typeof pipelineCases.$inferSelect;
+    previousVersion: number;
+    version: number;
+  },
+) {
+  const rows = await db
+    .selectDistinctOn([issues.id], { issueId: issues.id })
+    .from(pipelineCaseBlockers)
+    .innerJoin(pipelineCases, eq(pipelineCaseBlockers.caseId, pipelineCases.id))
+    .innerJoin(pipelineCaseIssueLinks, eq(pipelineCaseIssueLinks.caseId, pipelineCases.id))
+    .innerJoin(issues, eq(pipelineCaseIssueLinks.issueId, issues.id))
+    .where(and(
+      eq(pipelineCaseBlockers.companyId, input.companyId),
+      eq(pipelineCaseBlockers.blockedByCaseId, input.upstreamCase.id),
+      eq(pipelineCases.companyId, input.companyId),
+      isNull(pipelineCases.terminalKind),
+      eq(pipelineCaseIssueLinks.companyId, input.companyId),
+      eq(pipelineCaseIssueLinks.role, "work"),
+      eq(issues.companyId, input.companyId),
+      ne(issues.status, "done"),
+      ne(issues.status, "cancelled"),
+      isNull(issues.hiddenAt),
+    ));
+
+  if (rows.length === 0) return;
+
+  const upstreamLink = buildCaseDeepLink({
+    pipelineId: input.upstreamCase.pipelineId,
+    caseId: input.upstreamCase.id,
+  });
+  const body = `Upstream case [${input.upstreamCase.caseKey}](${upstreamLink}) changed (v${input.previousVersion}→v${input.version}).`;
+
+  for (const row of rows) {
+    await db.insert(issueComments).values({
+      companyId: input.companyId,
+      issueId: row.issueId,
+      authorType: "system",
+      body,
+    });
+    await db.update(issues).set({ updatedAt: nowDate() }).where(eq(issues.id, row.issueId));
+  }
+}
+
 async function validateBlockerSet(
   db: PipelineDb,
   input: { companyId: string; caseId: string; blockedByCaseIds: string[] },
@@ -863,14 +911,23 @@ export function pipelineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeu
         parentCaseId: input.parentCaseId,
       });
     }
+    const titleChanged = input.title !== undefined && input.title !== current.title;
+    const summaryChanged = input.summary !== undefined && input.summary !== current.summary;
+    const fieldsChanged = input.fields !== undefined && !isDeepStrictEqual(input.fields, current.fields);
+    const parentCaseChanged = input.parentCaseId !== undefined && input.parentCaseId !== current.parentCaseId;
+    const contentChanged = titleChanged || summaryChanged || fieldsChanged;
+    if (!contentChanged && !parentCaseChanged) {
+      return { case: current, event: null };
+    }
+
     const patch: Partial<typeof pipelineCases.$inferInsert> = {
       version: current.version + 1,
       updatedAt: nowDate(),
     };
-    if (input.title !== undefined) patch.title = input.title;
-    if (input.summary !== undefined) patch.summary = input.summary;
-    if (input.fields !== undefined) patch.fields = input.fields;
-    if (input.parentCaseId !== undefined) patch.parentCaseId = input.parentCaseId;
+    if (titleChanged) patch.title = input.title;
+    if (summaryChanged) patch.summary = input.summary;
+    if (fieldsChanged) patch.fields = input.fields;
+    if (parentCaseChanged) patch.parentCaseId = input.parentCaseId;
 
     const [updated] = await tx
       .update(pipelineCases)
@@ -890,10 +947,10 @@ export function pipelineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeu
       payload: {
         previousVersion: current.version,
         version: updated.version,
-        parentCaseChanged: input.parentCaseId !== undefined && input.parentCaseId !== current.parentCaseId,
+        parentCaseChanged,
       },
     });
-    if (input.parentCaseId !== undefined && input.parentCaseId !== current.parentCaseId) {
+    if (parentCaseChanged) {
       const terminalDelta = isTerminalKind(current.terminalKind) ? 1 : 0;
       await adjustParentCounts(tx, {
         parentCaseId: current.parentCaseId,
@@ -908,6 +965,14 @@ export function pipelineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeu
       if (isTerminalKind(current.terminalKind)) {
         await handleChildrenTerminal(tx, input.companyId, input.parentCaseId);
       }
+    }
+    if (contentChanged) {
+      await notifyDependentWorkIssuesOfUpstreamContentChange(tx, {
+        companyId: input.companyId,
+        upstreamCase: updated,
+        previousVersion: current.version,
+        version: updated.version,
+      });
     }
     return { case: updated, event };
   }

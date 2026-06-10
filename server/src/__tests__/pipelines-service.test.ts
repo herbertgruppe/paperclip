@@ -124,6 +124,28 @@ describeEmbeddedPostgres("pipelineService", () => {
     return count ?? 0;
   }
 
+  async function seedLinkedIssue(input: {
+    companyId: string;
+    caseId: string;
+    role: "origin" | "conversation" | "work" | "automation";
+    status?: "backlog" | "todo" | "in_progress" | "in_review" | "done" | "blocked" | "cancelled";
+    title?: string;
+  }) {
+    const [issue] = await db.insert(issues).values({
+      companyId: input.companyId,
+      title: input.title ?? `${input.role} issue`,
+      status: input.status ?? "todo",
+      priority: "medium",
+    }).returning();
+    await db.insert(pipelineCaseIssueLinks).values({
+      companyId: input.companyId,
+      caseId: input.caseId,
+      issueId: issue!.id,
+      role: input.role,
+    });
+    return issue!;
+  }
+
   it("seeds default stages and protects non-empty stage deletion", async () => {
     const { company, pipeline, byKey } = await seedPipeline();
 
@@ -476,6 +498,162 @@ describeEmbeddedPostgres("pipelineService", () => {
       actor: userActor,
     });
     expect(moved.case.version).toBe(2);
+  });
+
+  it("posts upstream drift notices to active dependent work issues only", async () => {
+    const { company, pipeline } = await seedPipeline();
+    const upstream = await svc.ingestCase({
+      companyId: company.id,
+      pipelineId: pipeline.id,
+      caseKey: "draft",
+      title: "Draft",
+      actor: userActor,
+    });
+    const workDependent = await svc.ingestCase({
+      companyId: company.id,
+      pipelineId: pipeline.id,
+      caseKey: "asset-work",
+      title: "Asset work",
+      blockedByCaseIds: [upstream.case.id],
+      actor: userActor,
+    });
+    const conversationDependent = await svc.ingestCase({
+      companyId: company.id,
+      pipelineId: pipeline.id,
+      caseKey: "asset-conversation",
+      title: "Asset conversation",
+      blockedByCaseIds: [upstream.case.id],
+      actor: userActor,
+    });
+    const workIssue = await seedLinkedIssue({
+      companyId: company.id,
+      caseId: workDependent.case.id,
+      role: "work",
+      title: "Asset work issue",
+    });
+    const conversationIssue = await seedLinkedIssue({
+      companyId: company.id,
+      caseId: conversationDependent.case.id,
+      role: "conversation",
+      title: "Conversation issue",
+    });
+
+    const updated = await svc.patchCaseContent({
+      companyId: company.id,
+      caseId: upstream.case.id,
+      title: "Draft v2",
+      expectedVersion: 1,
+      actor: userActor,
+    });
+
+    expect(updated.version).toBe(2);
+    const workComments = await db.select().from(issueComments).where(eq(issueComments.issueId, workIssue.id));
+    expect(workComments).toHaveLength(1);
+    expect(workComments[0]!.authorType).toBe("system");
+    expect(workComments[0]!.body).toBe(
+      `Upstream case [draft](/PAP/pipelines/${pipeline.id}/cases/${upstream.case.id}) changed (v1→v2).`,
+    );
+    const conversationComments = await db.select().from(issueComments).where(eq(issueComments.issueId, conversationIssue.id));
+    expect(conversationComments).toHaveLength(0);
+  });
+
+  it("skips upstream drift notices for terminal dependents and dependents without work issues", async () => {
+    const { company, pipeline } = await seedPipeline();
+    const upstream = await svc.ingestCase({
+      companyId: company.id,
+      pipelineId: pipeline.id,
+      caseKey: "source",
+      title: "Source",
+      actor: userActor,
+    });
+    const terminalDependent = await svc.ingestCase({
+      companyId: company.id,
+      pipelineId: pipeline.id,
+      stageKey: "done",
+      caseKey: "terminal-dependent",
+      title: "Terminal dependent",
+      actor: userActor,
+    });
+    await svc.replaceBlockers({
+      companyId: company.id,
+      caseId: terminalDependent.case.id,
+      blockedByCaseIds: [upstream.case.id],
+      actor: userActor,
+    });
+    const noWorkDependent = await svc.ingestCase({
+      companyId: company.id,
+      pipelineId: pipeline.id,
+      caseKey: "no-work-dependent",
+      title: "No work dependent",
+      blockedByCaseIds: [upstream.case.id],
+      actor: userActor,
+    });
+    const terminalIssue = await seedLinkedIssue({
+      companyId: company.id,
+      caseId: terminalDependent.case.id,
+      role: "work",
+      title: "Terminal work issue",
+    });
+    const conversationIssue = await seedLinkedIssue({
+      companyId: company.id,
+      caseId: noWorkDependent.case.id,
+      role: "conversation",
+      title: "Non-work issue",
+    });
+
+    await svc.patchCaseContent({
+      companyId: company.id,
+      caseId: upstream.case.id,
+      summary: "Updated source",
+      expectedVersion: 1,
+      actor: userActor,
+    });
+
+    const terminalComments = await db.select().from(issueComments).where(eq(issueComments.issueId, terminalIssue.id));
+    expect(terminalComments).toHaveLength(0);
+    const conversationComments = await db.select().from(issueComments).where(eq(issueComments.issueId, conversationIssue.id));
+    expect(conversationComments).toHaveLength(0);
+  });
+
+  it("does not bump versions or notify dependents on no-op content patches", async () => {
+    const { company, pipeline } = await seedPipeline();
+    const upstream = await svc.ingestCase({
+      companyId: company.id,
+      pipelineId: pipeline.id,
+      caseKey: "noop-source",
+      title: "No-op source",
+      fields: { channel: "blog" },
+      actor: userActor,
+    });
+    const dependent = await svc.ingestCase({
+      companyId: company.id,
+      pipelineId: pipeline.id,
+      caseKey: "noop-dependent",
+      title: "No-op dependent",
+      blockedByCaseIds: [upstream.case.id],
+      actor: userActor,
+    });
+    const workIssue = await seedLinkedIssue({
+      companyId: company.id,
+      caseId: dependent.case.id,
+      role: "work",
+      title: "No-op work issue",
+    });
+    const beforeEvents = await eventCount(upstream.case.id);
+
+    const patched = await svc.patchCaseContent({
+      companyId: company.id,
+      caseId: upstream.case.id,
+      title: "No-op source",
+      fields: { channel: "blog" },
+      expectedVersion: 1,
+      actor: userActor,
+    });
+
+    expect(patched.version).toBe(1);
+    expect(await eventCount(upstream.case.id)).toBe(beforeEvents);
+    const comments = await db.select().from(issueComments).where(eq(issueComments.issueId, workIssue.id));
+    expect(comments).toHaveLength(0);
   });
 
   it("resolves in-batch forward blocker case keys", async () => {
