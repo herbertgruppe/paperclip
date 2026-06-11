@@ -7,6 +7,8 @@ import {
   Check,
   GitBranch,
   Hexagon,
+  Pause,
+  Play,
   Plus,
   Save,
   Trash2,
@@ -120,6 +122,49 @@ function cleanVariables(variables: EditorVariable[]) {
       };
     })
     .filter((variable) => variable.key);
+}
+
+type StageFormValues = {
+  name: string;
+  kind: string;
+  newEntriesDisabled: boolean;
+  disableReason: string;
+  approvalRequired: boolean;
+  approval: string;
+  whatHappensHere: string;
+  approveTarget: string;
+  rejectTarget: string;
+  requestChangesTarget: string;
+  requireRejectReason: boolean;
+  variables: ReturnType<typeof cleanVariables>;
+  transitionTargetIds: string[];
+};
+
+type PipelineTransitionRecord = { fromStageId: string; toStageId: string; label?: string | null };
+
+function computeStageForm(
+  stage: PipelineStage,
+  transitions: PipelineTransitionRecord[],
+): StageFormValues {
+  const config = stageConfig(stage);
+  return {
+    name: stage.name,
+    kind: stage.kind,
+    newEntriesDisabled: stageNewEntriesDisabled(stage),
+    disableReason: config.disabledReason ?? "",
+    approvalRequired: Boolean(config.requireApproval),
+    approval: approvalValue(config),
+    whatHappensHere: config.whatHappensHere ?? "",
+    approveTarget: config.approveToStageKey ?? "",
+    rejectTarget: config.rejectToStageKey ?? "",
+    requestChangesTarget: config.requestChangesToStageKey ?? "",
+    requireRejectReason: config.requireRejectReason ?? true,
+    variables: cleanVariables(variableRows(stage)),
+    transitionTargetIds: transitions
+      .filter((transition) => transition.fromStageId === stage.id)
+      .map((transition) => transition.toStageId)
+      .sort(),
+  };
 }
 
 function approvalValue(config: StageConfig) {
@@ -290,26 +335,20 @@ export function PipelineSettings() {
 
   useEffect(() => {
     if (!selectedStage) return;
-    const config = stageConfig(selectedStage);
-    setStageName(selectedStage.name);
-    setStageKind(selectedStage.kind);
-    setNewEntriesDisabled(stageNewEntriesDisabled(selectedStage));
-    setDisableReason(config.disabledReason ?? "");
-    setApprovalRequired(Boolean(config.requireApproval));
-    setSelectedApproval(approvalValue(config));
-    setWhatHappensHere(config.whatHappensHere ?? "");
-    setApproveTarget(config.approveToStageKey ?? "");
-    setRejectTarget(config.rejectToStageKey ?? "");
-    setRequestChangesTarget(config.requestChangesToStageKey ?? "");
-    setRequireRejectReason(config.requireRejectReason ?? true);
+    const form = computeStageForm(selectedStage, pipeline?.transitions ?? []);
+    setStageName(form.name);
+    setStageKind(form.kind);
+    setNewEntriesDisabled(form.newEntriesDisabled);
+    setDisableReason(form.disableReason);
+    setApprovalRequired(form.approvalRequired);
+    setSelectedApproval(form.approval);
+    setWhatHappensHere(form.whatHappensHere);
+    setApproveTarget(form.approveTarget);
+    setRejectTarget(form.rejectTarget);
+    setRequestChangesTarget(form.requestChangesTarget);
+    setRequireRejectReason(form.requireRejectReason);
     setVariables(variableRows(selectedStage));
-    setTransitionTargets(
-      new Set(
-        (pipeline?.transitions ?? [])
-          .filter((transition) => transition.fromStageId === selectedStage.id)
-          .map((transition) => transition.toStageId),
-      ),
-    );
+    setTransitionTargets(new Set(form.transitionTargetIds));
   }, [pipeline?.transitions, selectedStage]);
 
   useEffect(() => {
@@ -366,7 +405,24 @@ export function PipelineSettings() {
           if (!fromStageKey || !toStageKey) return [];
           return [{ fromStageKey, toStageKey, label: transition.label ?? null }];
         });
-      const selectedEdges = [...transitionTargets].flatMap((targetId) => {
+      // Effective "allowed next steps". For review stages the connections are
+      // kept in sync with the review outcomes (approve / decline / changes)
+      // instead of a separate picker. Every stage can always move to a
+      // cancelled stage by default.
+      const keyToId = new Map(stages.map((stage) => [stage.key, stage.id]));
+      const effectiveTargetIds = new Set<string>(
+        stageKind === "review"
+          ? [approveTarget, rejectTarget, requestChangesTarget]
+              .map((key) => keyToId.get(key))
+              .filter((id): id is string => Boolean(id))
+          : transitionTargets,
+      );
+      for (const stage of stages) {
+        if (stage.kind === "cancelled" && stage.id !== selectedStage.id) {
+          effectiveTargetIds.add(stage.id);
+        }
+      }
+      const selectedEdges = [...effectiveTargetIds].flatMap((targetId) => {
         const toStageKey = keyById.get(targetId);
         if (!toStageKey) return [];
         const prior = existingTransitions.find(
@@ -538,6 +594,32 @@ export function PipelineSettings() {
   const archiveEnabled = archiveConfirmation === pipeline.name && !archivePipeline.isPending;
   const reviewTargetsMissing = stageKind === "review" && (!approveTarget || !rejectTarget);
   const otherStages = stages.filter((stage) => stage.id !== selectedStage?.id);
+  const isReviewStage = stageKind === "review";
+
+  const savedStageForm = selectedStage
+    ? computeStageForm(selectedStage, pipeline.transitions ?? [])
+    : null;
+  const currentStageForm: StageFormValues | null = selectedStage
+    ? {
+        name: stageName,
+        kind: stageKind,
+        newEntriesDisabled,
+        disableReason,
+        approvalRequired,
+        approval: selectedApproval,
+        whatHappensHere,
+        approveTarget,
+        rejectTarget,
+        requestChangesTarget,
+        requireRejectReason,
+        variables: cleanVariables(variables),
+        transitionTargetIds: [...transitionTargets].sort(),
+      }
+    : null;
+  const stageDirty =
+    savedStageForm != null &&
+    currentStageForm != null &&
+    JSON.stringify(savedStageForm) !== JSON.stringify(currentStageForm);
 
   return (
     <div className="space-y-6">
@@ -654,28 +736,6 @@ export function PipelineSettings() {
                 </div>
               </Section>
 
-              <Section title="Disable">
-                <div className="flex items-center justify-between gap-4">
-                  <div>
-                    <div className="text-sm font-medium">Block new entry</div>
-                    <p className="mt-1 text-sm text-muted-foreground">
-                      Nothing new can move into this stage. Existing items stay visible on the board.
-                    </p>
-                  </div>
-                  <ToggleSwitch checked={newEntriesDisabled} onCheckedChange={setNewEntriesDisabled} />
-                </div>
-                {newEntriesDisabled ? (
-                  <label className="block space-y-1.5 text-sm font-medium">
-                    <span>Reason</span>
-                    <Textarea
-                      value={disableReason}
-                      onChange={(event) => setDisableReason(event.target.value)}
-                      rows={2}
-                    />
-                  </label>
-                ) : null}
-              </Section>
-
               <Section title="Approval">
                 <div className="flex items-center justify-between gap-4">
                   <div>
@@ -717,52 +777,38 @@ export function PipelineSettings() {
 
               {stageKind === "review" ? (
                 <Section title="Review outcomes">
-                  <div className="grid gap-3 sm:grid-cols-2">
-                    <label className="block space-y-1.5 text-sm font-medium">
-                      <span>Approved items move to</span>
-                      <select
-                        aria-label="Approved items move to"
-                        value={approveTarget}
-                        onChange={(event) => setApproveTarget(event.target.value)}
-                        className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                  <p className="text-sm text-muted-foreground">
+                    These are this stage&apos;s allowed next steps. Each outcome sends the item to the stage you pick.
+                  </p>
+                  <div className="space-y-2">
+                    {([
+                      ["Approved items move to", approveTarget, setApproveTarget, "Choose a stage"],
+                      ["Declined items move to", rejectTarget, setRejectTarget, "Choose a stage"],
+                      ["Items needing changes move to", requestChangesTarget, setRequestChangesTarget, "Stay in review"],
+                    ] as const).map(([label, value, setValue, emptyLabel]) => (
+                      <div
+                        key={label}
+                        className="grid grid-cols-1 items-center gap-2 sm:grid-cols-[minmax(0,1fr)_240px]"
                       >
-                        <option value="">Choose a stage</option>
-                        {otherStages.map((stage) => (
-                          <option key={stage.id} value={stage.key}>{stage.name}</option>
-                        ))}
-                      </select>
-                    </label>
-                    <label className="block space-y-1.5 text-sm font-medium">
-                      <span>Declined items move to</span>
-                      <select
-                        aria-label="Declined items move to"
-                        value={rejectTarget}
-                        onChange={(event) => setRejectTarget(event.target.value)}
-                        className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-                      >
-                        <option value="">Choose a stage</option>
-                        {otherStages.map((stage) => (
-                          <option key={stage.id} value={stage.key}>{stage.name}</option>
-                        ))}
-                      </select>
-                    </label>
-                    <label className="block space-y-1.5 text-sm font-medium">
-                      <span>Items needing changes move to</span>
-                      <select
-                        aria-label="Items needing changes move to"
-                        value={requestChangesTarget}
-                        onChange={(event) => setRequestChangesTarget(event.target.value)}
-                        className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
-                      >
-                        <option value="">Stay in review</option>
-                        {otherStages.map((stage) => (
-                          <option key={stage.id} value={stage.key}>{stage.name}</option>
-                        ))}
-                      </select>
-                    </label>
-                    <div className="flex items-center justify-between gap-4 pt-1">
-                      <div className="text-sm font-medium">Ask for a note when declining</div>
-                      <ToggleSwitch checked={requireRejectReason} onCheckedChange={setRequireRejectReason} />
+                        <span className="text-sm font-medium">{label}</span>
+                        <select
+                          aria-label={label}
+                          value={value}
+                          onChange={(event) => setValue(event.target.value)}
+                          className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                        >
+                          <option value="">{emptyLabel}</option>
+                          {otherStages.map((stage) => (
+                            <option key={stage.id} value={stage.key}>{stage.name}</option>
+                          ))}
+                        </select>
+                      </div>
+                    ))}
+                    <div className="grid grid-cols-1 items-center gap-2 sm:grid-cols-[minmax(0,1fr)_240px]">
+                      <span className="text-sm font-medium">Ask for a note when declining</span>
+                      <div className="sm:justify-self-start">
+                        <ToggleSwitch checked={requireRejectReason} onCheckedChange={setRequireRejectReason} />
+                      </div>
                     </div>
                   </div>
                   {reviewTargetsMissing ? (
@@ -849,33 +895,91 @@ export function PipelineSettings() {
                 </div>
               </Section>
 
-              <Section title="Connections">
-                <div className="grid gap-2 sm:grid-cols-2">
-                  {otherStages.map((stage) => (
-                    <label key={stage.id} className="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm">
-                      <input
-                        type="checkbox"
-                        checked={transitionTargets.has(stage.id)}
-                        onChange={(event) => {
-                          setTransitionTargets((current) => {
-                            const next = new Set(current);
-                            if (event.target.checked) next.add(stage.id);
-                            else next.delete(stage.id);
-                            return next;
-                          });
-                        }}
-                      />
-                      {selectedStage.name} can move to {stage.name}
-                    </label>
-                  ))}
+              {isReviewStage ? null : (
+                <Section title="Allowed next steps">
+                  <p className="text-sm text-muted-foreground">
+                    Where items in {selectedStage.name} are allowed to move next.
+                  </p>
+                  <div className="space-y-2">
+                    {otherStages.map((stage) => {
+                      const isCancelled = stage.kind === "cancelled";
+                      const checked = isCancelled || transitionTargets.has(stage.id);
+                      return (
+                        <label
+                          key={stage.id}
+                          className={cn(
+                            "flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm",
+                            isCancelled && "text-muted-foreground",
+                          )}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            disabled={isCancelled}
+                            onChange={(event) => {
+                              if (isCancelled) return;
+                              setTransitionTargets((current) => {
+                                const next = new Set(current);
+                                if (event.target.checked) next.add(stage.id);
+                                else next.delete(stage.id);
+                                return next;
+                              });
+                            }}
+                          />
+                          <span className="flex-1">{stage.name}</span>
+                          {isCancelled ? (
+                            <span className="text-xs text-muted-foreground">Always available</span>
+                          ) : null}
+                        </label>
+                      );
+                    })}
+                  </div>
+                </Section>
+              )}
+
+              <Section title="New entries">
+                <div className="flex items-center justify-between gap-4">
+                  <div>
+                    <div className="text-sm font-medium">
+                      {newEntriesDisabled ? "New entries are paused" : "New entries are open"}
+                    </div>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      When paused, nothing new can move into this stage. Existing items stay on the board.
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    variant={newEntriesDisabled ? "default" : "outline"}
+                    onClick={() => setNewEntriesDisabled((value) => !value)}
+                  >
+                    {newEntriesDisabled ? (
+                      <>
+                        <Play className="h-4 w-4" />
+                        Resume
+                      </>
+                    ) : (
+                      <>
+                        <Pause className="h-4 w-4" />
+                        Pause new entries
+                      </>
+                    )}
+                  </Button>
                 </div>
               </Section>
 
               {saveStage.error ? <p className="text-sm text-destructive">{saveStage.error.message}</p> : null}
-              <Button type="submit" disabled={saveStage.isPending || !stageName.trim() || reviewTargetsMissing}>
-                {saveStage.isPending ? <Check className="h-4 w-4" /> : <Save className="h-4 w-4" />}
-                {saveStage.isPending ? "Saving..." : "Save stage"}
-              </Button>
+
+              {stageDirty || saveStage.isPending ? (
+                <div className="sticky bottom-0 z-10 -mx-6 mt-6 flex items-center justify-between gap-3 border-t border-border bg-background/95 px-6 py-3 backdrop-blur motion-safe:animate-in motion-safe:fade-in motion-safe:slide-in-from-bottom-2">
+                  <span className="text-sm text-muted-foreground">
+                    {saveStage.isPending ? "Saving changes…" : "You have unsaved changes."}
+                  </span>
+                  <Button type="submit" disabled={saveStage.isPending || !stageName.trim() || reviewTargetsMissing}>
+                    {saveStage.isPending ? <Check className="h-4 w-4" /> : <Save className="h-4 w-4" />}
+                    {saveStage.isPending ? "Saving..." : "Save stage"}
+                  </Button>
+                </div>
+              ) : null}
             </form>
           ) : null}
         </div>
