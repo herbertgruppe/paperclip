@@ -84,4 +84,31 @@ describe("MarkdownBody re-render stability (PAP-10767)", () => {
     expect(codeAfter).toBe(codeBefore);
     expect(anchorAfter).toBe(anchorBefore);
   });
+
+  it("preserves text selection across a parent re-render with unchanged props", () => {
+    container = document.createElement("div");
+    document.body.appendChild(container);
+    root = createRoot(container);
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    flushSync(() => root?.render(tree(SAMPLE, queryClient)));
+
+    const paragraph = container.querySelector("p");
+    const textNode = paragraph?.firstChild;
+    expect(textNode?.nodeType).toBe(Node.TEXT_NODE);
+
+    const range = document.createRange();
+    range.setStart(textNode!, 0);
+    range.setEnd(textNode!, "Some text".length);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    expect(selection?.toString()).toBe("Some text");
+
+    flushSync(() => root?.render(tree(SAMPLE, queryClient)));
+
+    expect(window.getSelection()?.toString()).toBe("Some text");
+  });
 });

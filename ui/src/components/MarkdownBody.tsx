@@ -1,4 +1,4 @@
-import { isValidElement, useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
+import { isValidElement, memo, useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Check, Copy, ExternalLink, Github, WrapText } from "lucide-react";
 import Markdown, { defaultUrlTransform, type Components, type Options } from "react-markdown";
@@ -563,7 +563,7 @@ function MermaidDiagramBlock({ source, darkMode }: { source: string; darkMode: b
   );
 }
 
-export function MarkdownBody({
+function MarkdownBodyImpl({
   children,
   className,
   style,
@@ -778,3 +778,5 @@ export function MarkdownBody({
     </div>
   );
 }
+
+export const MarkdownBody = memo(MarkdownBodyImpl);
