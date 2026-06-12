@@ -1477,8 +1477,8 @@ export function PipelineItemDetailView({ pipelineId, caseId }: { pipelineId: str
     queryFn: () => pipelinesApi.getCase(caseId),
   });
   const children = useQuery({
-    queryKey: queryKeys.pipelines.caseChildren(pipelineId, caseId),
-    queryFn: () => pipelinesApi.getCaseChildren(pipelineId, caseId),
+    queryKey: queryKeys.pipelines.caseChildren(caseId),
+    queryFn: () => pipelinesApi.getCaseChildren(caseId),
   });
   const events = useQuery({
     queryKey: queryKeys.pipelines.caseEvents(caseId),
@@ -1750,7 +1750,7 @@ export function PipelineItemDetailView({ pipelineId, caseId }: { pipelineId: str
           </DetailSection>
 
           <DetailSection title={`Built from ${detail.childrenSummary.childCount} ${detail.childrenSummary.childCount === 1 ? "item" : "items"}`}>
-            <BuiltFromTree pipelineId={pipelineId} rows={childRows} />
+            <BuiltFromTree rows={childRows} />
           </DetailSection>
         </main>
 
@@ -1821,10 +1821,8 @@ function DetailSection({ title, children }: { title: string; children: ReactNode
 }
 
 function BuiltFromTree({
-  pipelineId,
   rows,
 }: {
-  pipelineId: string;
   rows: Array<{ case: PipelineCase; stage: PipelineStage }>;
 }) {
   if (rows.length === 0) {
@@ -1835,7 +1833,7 @@ function BuiltFromTree({
       {rows.map((row) => (
         <li key={row.case.id}>
           <Link
-            to={`/pipelines/${pipelineId}/items/${row.case.id}`}
+            to={`/pipelines/${row.case.pipelineId}/items/${row.case.id}`}
             className="grid grid-cols-[18px_1fr_auto] items-center gap-3 py-3 text-sm hover:bg-muted/40"
           >
             <GitBranch className="h-4 w-4 text-muted-foreground" />

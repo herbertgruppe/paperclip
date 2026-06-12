@@ -246,6 +246,53 @@ describeEmbeddedPostgres("pipeline routes", () => {
     await http.delete(`/api/pipelines/${pipelineId}/stages/${stageId}?moveCasesToStageId=${qaStage.body.id}`).expect(200);
   });
 
+  it("lists a case's children across pipeline boundaries via /cases/:caseId/children", async () => {
+    const company = await seedCompany();
+    const http = request(app(boardActor));
+
+    const releasePipeline = await http
+      .post(`/api/companies/${company.id}/pipelines`)
+      .send({ key: "releases", name: "Releases" })
+      .expect(201);
+    const featurePipeline = await http
+      .post(`/api/companies/${company.id}/pipelines`)
+      .send({ key: "features", name: "Features" })
+      .expect(201);
+
+    const release = await http
+      .post(`/api/pipelines/${releasePipeline.body.id}/cases`)
+      .send({ caseKey: "v1", title: "Release v1" })
+      .expect(201);
+    const releaseCaseId = release.body.case.id as string;
+
+    // Children live in a *different* pipeline than their parent — the release -> feature tree.
+    const featureA = await http
+      .post(`/api/pipelines/${featurePipeline.body.id}/cases`)
+      .send({ caseKey: "feat-a", title: "Feature A", parentCaseId: releaseCaseId })
+      .expect(201);
+    const featureB = await http
+      .post(`/api/pipelines/${featurePipeline.body.id}/cases`)
+      .send({ caseKey: "feat-b", title: "Feature B", parentCaseId: releaseCaseId })
+      .expect(201);
+
+    // The pipeline-scoped list filters by the release's own pipeline and so finds nothing.
+    const samePipelineList = await http
+      .get(`/api/pipelines/${releasePipeline.body.id}/cases?parentCaseId=${releaseCaseId}`)
+      .expect(200);
+    expect(samePipelineList.body).toHaveLength(0);
+
+    // The case-scoped endpoint returns the cross-pipeline children, matching childCount.
+    const children = await http.get(`/api/cases/${releaseCaseId}/children`).expect(200);
+    const childIds = children.body.map((row: { case: { id: string } }) => row.case.id).sort();
+    expect(childIds).toEqual([featureA.body.case.id, featureB.body.case.id].sort());
+    for (const row of children.body) {
+      expect(row.case.pipelineId).toBe(featurePipeline.body.id);
+    }
+
+    const detail = await http.get(`/api/cases/${releaseCaseId}`).expect(200);
+    expect(detail.body.childrenSummary.childCount).toBe(2);
+  });
+
   it("lists, guards, and restores pipeline document revisions", async () => {
     const company = await seedCompany();
     const http = request(app(boardActor));

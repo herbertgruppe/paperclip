@@ -1069,6 +1069,26 @@ export function pipelineRoutes(db: Db, options: Parameters<typeof pipelineServic
     res.json(detail);
   });
 
+  // Direct children of a case, scoped by parent rather than pipeline. Children can be
+  // parented across pipelines (release -> feature -> content trees), so this must not
+  // filter by a single pipelineId the way GET /pipelines/:pipelineId/cases does — that
+  // filter hides cross-pipeline children even though childCount counts them.
+  router.get("/cases/:caseId/children", async (req, res) => {
+    const caseId = req.params.caseId as string;
+    const companyId = await assertCaseAccess(db, req, caseId);
+    const rows = await db
+      .select({ case: pipelineCases, stage: pipelineStages })
+      .from(pipelineCases)
+      .innerJoin(pipelineStages, eq(pipelineCases.stageId, pipelineStages.id))
+      .where(and(
+        eq(pipelineCases.companyId, companyId),
+        eq(pipelineCases.parentCaseId, caseId),
+      ))
+      .orderBy(asc(pipelineCases.createdAt));
+    const activeWork = await loadActiveWorkForCases(db, companyId, rows.map((row) => row.case.id));
+    res.json(rows.map((row) => ({ ...row, activeWork: activeWork.get(row.case.id) ?? null })));
+  });
+
   router.patch("/cases/:caseId", validate(casePatchSchema), async (req, res) => {
     const caseId = req.params.caseId as string;
     const companyId = await assertCaseAccess(db, req, caseId);

@@ -390,6 +390,34 @@ describe("PipelineItemDetailView", () => {
     });
   });
 
+  it("links each built-from child to its own pipeline, even across pipelines", async () => {
+    const { container, root } = await renderItemPage(itemDetail(), [], {
+      children: [
+        {
+          case: {
+            id: "cross-child",
+            // A release's feature children live in a different pipeline than the release.
+            pipelineId: "pipeline-features",
+            stageId: "stage-review",
+            title: "Cross-pipeline feature",
+            fields: {},
+            childCount: 0,
+            terminalKind: null,
+          },
+          stage: pipeline.stages[1],
+        },
+      ],
+    });
+
+    expect(container.textContent).toContain("Cross-pipeline feature");
+    const link = container.querySelector('a[href="/pipelines/pipeline-features/items/cross-child"]');
+    expect(link).not.toBeNull();
+
+    act(() => {
+      root.unmount();
+    });
+  });
+
   it("renders empty states when there is no suggestion, conversation, or child item", async () => {
     const emptyDetail = itemDetail({
       fields: {},

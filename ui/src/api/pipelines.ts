@@ -402,7 +402,8 @@ export const pipelinesApi = {
     return api.get<Array<{ case: PipelineCase; stage: PipelineStage; activeWork?: PipelineCaseActiveWork | null }>>(`/pipelines/${pipelineId}/cases${qs ? `?${qs}` : ""}`);
   },
   getCase: (caseId: string) => api.get<PipelineCaseDetail>(`/cases/${caseId}`),
-  getCaseChildren: (pipelineId: string, caseId: string) => pipelinesApi.listCases(pipelineId, { parentCaseId: caseId }),
+  getCaseChildren: (caseId: string) =>
+    api.get<Array<{ case: PipelineCase; stage: PipelineStage; activeWork?: PipelineCaseActiveWork | null }>>(`/cases/${caseId}/children`),
   getCaseEvents: (caseId: string, filters?: { limit?: number; offset?: number; order?: "asc" | "desc" }) => {
     const params = new URLSearchParams();
     if (filters?.limit !== undefined) params.set("limit", String(filters.limit));
