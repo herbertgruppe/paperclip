@@ -72,6 +72,7 @@ import {
   normalizePipelineChildRows,
 } from "../lib/pipeline-item-detail";
 import { extractWorkReferences, referenceFieldKeys } from "../lib/pipeline-references";
+import { pieceNounPlural, readStageBreakdown } from "../lib/pipeline-breakdown";
 import { hasBlockingShortcutDialog, isKeyboardShortcutTextInputTarget } from "../lib/keyboardShortcuts";
 import { formatLearningEvent, groupLearningEventsByDay } from "../lib/pipeline-learnings";
 import { queryKeys } from "../lib/queryKeys";
@@ -1012,6 +1013,7 @@ function PipelineBoardColumn({
   cases,
   settingsHref,
   warningCount,
+  breakdownTarget,
   onColumnEmpty,
   isDragTargeted,
   isDragBlocked,
@@ -1020,6 +1022,7 @@ function PipelineBoardColumn({
   cases: BoardCase[];
   settingsHref?: string | null;
   warningCount?: number;
+  breakdownTarget?: { pipelineId: string; name: string } | null;
   onColumnEmpty?: (stage: PipelineStage) => string;
   isDragTargeted?: boolean;
   isDragBlocked?: boolean;
@@ -1058,6 +1061,18 @@ function PipelineBoardColumn({
           ) : null}
         </span>
       </div>
+      {breakdownTarget ? (
+        <div className="border-b border-border px-3 py-1.5">
+          <Link
+            to={`/pipelines/${breakdownTarget.pipelineId}`}
+            className="inline-flex max-w-full items-center gap-1 rounded-full border border-border px-2 py-0.5 text-xs font-medium text-muted-foreground hover:text-foreground"
+            title={`Breaks into ${breakdownTarget.name}`}
+          >
+            <span className="shrink-0">→</span>
+            <span className="truncate">Breaks into {breakdownTarget.name}</span>
+          </Link>
+        </div>
+      ) : null}
       <div
         ref={setNodeRef}
         className={`min-h-[160px] flex-1 space-y-2 rounded-b-md px-2 py-2 transition-colors ${
@@ -1086,6 +1101,7 @@ function PipelineBoardColumn({
 function PipelineBoard({ pipelineId }: { pipelineId: string }) {
   const { setBreadcrumbs } = useBreadcrumbs();
   const { pushToast } = useToastActions();
+  const { selectedCompanyId } = useCompany();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [activeCaseId, setActiveCaseId] = useState<string | null>(null);
@@ -1115,6 +1131,14 @@ function PipelineBoard({ pipelineId }: { pipelineId: string }) {
   const healthQuery = useQuery({
     queryKey: queryKeys.pipelines.health(pipelineId),
     queryFn: () => pipelinesApi.getHealth(pipelineId),
+  });
+
+  // The workspace pipeline list lets us resolve "Break into pieces" connector
+  // chips by name — which pipeline this board feeds, and which feed into it.
+  const allPipelinesQuery = useQuery({
+    queryKey: selectedCompanyId ? queryKeys.pipelines.list(selectedCompanyId) : ["pipelines", "missing-company"],
+    queryFn: () => pipelinesApi.list(selectedCompanyId!),
+    enabled: Boolean(selectedCompanyId),
   });
 
   const pipeline = pipelineQuery.data;
@@ -1186,6 +1210,44 @@ function PipelineBoard({ pipelineId }: { pipelineId: string }) {
     }
     return map;
   }, [orderedStages]);
+
+  const pipelineNameById = useMemo(
+    () => new Map((allPipelinesQuery.data ?? []).map((entry) => [entry.id, entry.name])),
+    [allPipelinesQuery.data],
+  );
+
+  // Per-stage outbound chip: "Breaks into <target>" on any stage configured to
+  // break work into another pipeline.
+  const breakdownTargetByStageId = useMemo(() => {
+    const map = new Map<string, { pipelineId: string; name: string }>();
+    for (const stage of orderedStages) {
+      const breakdown = readStageBreakdown(stage);
+      if (breakdown?.targetPipelineId) {
+        map.set(stage.id, {
+          pipelineId: breakdown.targetPipelineId,
+          name: pipelineNameById.get(breakdown.targetPipelineId) ?? "another pipeline",
+        });
+      }
+    }
+    return map;
+  }, [orderedStages, pipelineNameById]);
+
+  // Inbound chip on the board title bar: which other pipelines break into this
+  // one, derived from their stage configs.
+  const fedByPipelines = useMemo(() => {
+    const seen = new Map<string, string>();
+    for (const candidate of allPipelinesQuery.data ?? []) {
+      if (candidate.id === pipelineId) continue;
+      for (const stage of candidate.stages ?? []) {
+        const breakdown = readStageBreakdown(stage);
+        if (breakdown?.targetPipelineId === pipelineId) {
+          seen.set(candidate.id, candidate.name);
+          break;
+        }
+      }
+    }
+    return [...seen.entries()].map(([id, name]) => ({ id, name }));
+  }, [allPipelinesQuery.data, pipelineId]);
 
   const moveAllowed = useCallback(
     (sourceStageId: string | null, targetStageId: string) => {
@@ -1318,6 +1380,21 @@ function PipelineBoard({ pipelineId }: { pipelineId: string }) {
           <h1 className="text-2xl font-semibold text-foreground">{pipeline.name}</h1>
           {pipeline.description ? <p className="mt-1 text-sm text-muted-foreground">{pipeline.description}</p> : null}
           <p className="mt-1 text-xs text-muted-foreground">{cases.length} total item{cases.length === 1 ? "" : "s"}</p>
+          {fedByPipelines.length > 0 ? (
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              {fedByPipelines.map((source) => (
+                <Link
+                  key={source.id}
+                  to={`/pipelines/${source.id}`}
+                  className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 text-xs font-medium text-muted-foreground hover:text-foreground"
+                  title={`Fed by ${source.name}`}
+                >
+                  <span className="shrink-0">←</span>
+                  <span className="truncate">Fed by {source.name}</span>
+                </Link>
+              ))}
+            </div>
+          ) : null}
         </div>
         <div className="flex shrink-0 flex-col items-stretch gap-2 sm:items-end">
           <Button asChild>
@@ -1366,6 +1443,7 @@ function PipelineBoard({ pipelineId }: { pipelineId: string }) {
                     stage.id === UNASSIGNED_STAGE_ID ? null : `/pipelines/${pipelineId}/settings?stage=${stage.id}`
                   }
                   warningCount={healthWarningsByStage[stage.id]?.length ?? 0}
+                  breakdownTarget={breakdownTargetByStageId.get(stage.id) ?? null}
                   isDragTargeted={isDragTargeted}
                   isDragBlocked={isDragBlocked}
                   onColumnEmpty={(columnStage) =>
@@ -1643,6 +1721,14 @@ export function PipelineItemDetailView({ pipelineId, caseId }: { pipelineId: str
   const eventRows = events.data?.items ?? [];
   const waitingChildren = getWaitingChildren(childRows);
   const childrenGate = hasChildrenGate(detail.stage);
+  // "Break into pieces" rollup: the configured piece noun drives every count
+  // string when this case's stage breaks work into another pipeline.
+  const breakdown = readStageBreakdown(detail.stage);
+  const pieceCountTotal = detail.childrenSummary.childCount;
+  const pieceCountDone = detail.childrenSummary.terminalChildCount;
+  const pieceNoun = breakdown?.pieceNoun ?? "piece";
+  const pieceNounPluralLabel = pieceNounPlural(pieceNoun);
+  const pieceLabel = (count: number) => (count === 1 ? pieceNoun : pieceNounPluralLabel);
   const changedNotice = itemHasChangedNotice(detail.case) ?? changedNoticeFromEvents(eventRows);
   const primaryAction = conversationLink
     ? (
@@ -1768,7 +1854,9 @@ export function PipelineItemDetailView({ pipelineId, caseId }: { pipelineId: str
           <div className="flex flex-col gap-2">
             <div className="flex items-center gap-2 text-sm font-semibold text-foreground">
               <ListTree className="h-4 w-4 text-muted-foreground" />
-              Waiting on {waitingChildren.length} of {detail.childrenSummary.childCount} child {detail.childrenSummary.childCount === 1 ? "item" : "items"}
+              {breakdown
+                ? `Waiting on ${waitingChildren.length} of ${pieceCountTotal} ${pieceLabel(pieceCountTotal)} · ${pieceCountDone} finished`
+                : `Waiting on ${waitingChildren.length} of ${pieceCountTotal} child ${pieceCountTotal === 1 ? "item" : "items"}`}
             </div>
             <div className="flex flex-wrap gap-x-3 gap-y-1 text-sm text-muted-foreground">
               {waitingChildren.map((row) => (
@@ -1818,8 +1906,35 @@ export function PipelineItemDetailView({ pipelineId, caseId }: { pipelineId: str
             )}
           </DetailSection>
 
-          <DetailSection title={`Built from ${detail.childrenSummary.childCount} ${detail.childrenSummary.childCount === 1 ? "item" : "items"}`}>
-            <BuiltFromTree rows={childRows} />
+          <DetailSection
+            title={
+              breakdown
+                ? pieceCountTotal > 0
+                  ? `Built from ${pieceCountTotal} ${pieceLabel(pieceCountTotal)}`
+                  : `No ${pieceNounPluralLabel} needed`
+                : `Built from ${pieceCountTotal} ${pieceCountTotal === 1 ? "item" : "items"}`
+            }
+          >
+            {breakdown && pieceCountTotal > 0 ? (
+              <p className="py-2 text-sm text-muted-foreground">
+                {pieceCountDone} of {pieceCountTotal} {pieceLabel(pieceCountTotal)} finished
+              </p>
+            ) : null}
+            {breakdown && pieceCountTotal === 0 ? (
+              <p className="py-2 text-sm text-muted-foreground">
+                Nothing was worth splitting — this case moved straight ahead without creating any {pieceNounPluralLabel}.
+              </p>
+            ) : (
+              <BuiltFromTree rows={childRows} />
+            )}
+            {breakdown && breakdown.targetPipelineId && pieceCountTotal > 0 ? (
+              <Link
+                to={`/pipelines/${breakdown.targetPipelineId}`}
+                className="mt-2 inline-block text-sm font-medium text-foreground hover:underline"
+              >
+                Open all {pieceNounPluralLabel} →
+              </Link>
+            ) : null}
           </DetailSection>
         </main>
 

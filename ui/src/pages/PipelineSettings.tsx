@@ -72,6 +72,13 @@ import { getRecentAssigneeIds, sortAgentsByRecency } from "../lib/recent-assigne
 import { cn, relativeTime } from "../lib/utils";
 import { Link, useNavigate, useParams, useSearchParams } from "@/lib/router";
 import { StageHealthWarnings } from "../components/PipelineHealthWarnings";
+import {
+  breakdownMechanicsBullets,
+  breakdownSummarySentence,
+  pieceNounPlural,
+  readStageBreakdown,
+  type BreakdownCopyNames,
+} from "../lib/pipeline-breakdown";
 
 type StageSectionKey = "overview" | "instructions" | "advanced" | "secrets" | "runs" | "activity" | "history";
 type ApproverKind = "any_human" | "user" | "agent";
@@ -272,6 +279,14 @@ type StageFormValues = {
   requireRejectReason: boolean;
   requireChildrenTerminal: boolean;
   autoAdvanceOnChildrenTerminal: string;
+  breakdownEnabled: boolean;
+  breakdownTargetPipelineId: string;
+  breakdownTargetStageKey: string;
+  breakdownPieceNoun: string;
+  breakdownInheritFields: string[];
+  breakdownAdvanceTo: string;
+  breakdownWaitForPieces: boolean;
+  breakdownWhenFinishedMoveTo: string;
   transitionTargetIds: string[];
 };
 
@@ -283,6 +298,7 @@ function computeStageForm(
 ): StageFormValues {
   const config = stageConfig(stage);
   const automation = stageAutomation(stage);
+  const breakdown = readStageBreakdown(stage);
   return {
     name: stage.name,
     kind: canonicalStageKind(stage.kind),
@@ -298,6 +314,14 @@ function computeStageForm(
     requireChildrenTerminal: config.requireChildrenTerminal === true,
     autoAdvanceOnChildrenTerminal:
       typeof config.autoAdvanceOnChildrenTerminal === "string" ? config.autoAdvanceOnChildrenTerminal : "",
+    breakdownEnabled: breakdown !== null,
+    breakdownTargetPipelineId: breakdown?.targetPipelineId ?? "",
+    breakdownTargetStageKey: breakdown?.targetStageKey ?? "",
+    breakdownPieceNoun: breakdown?.pieceNoun ?? "piece",
+    breakdownInheritFields: breakdown?.inheritFields ?? [],
+    breakdownAdvanceTo: breakdown?.advanceTo ?? "",
+    breakdownWaitForPieces: breakdown?.waitForPieces ?? false,
+    breakdownWhenFinishedMoveTo: breakdown?.whenFinishedMoveTo ?? "",
     transitionTargetIds: transitions
       .filter((transition) => transition.fromStageId === stage.id)
       .map((transition) => transition.toStageId)
@@ -544,6 +568,14 @@ export function PipelineSettings() {
   const [requireRejectReason, setRequireRejectReason] = useState(true);
   const [requireChildrenTerminal, setRequireChildrenTerminal] = useState(false);
   const [autoAdvanceOnChildrenTerminal, setAutoAdvanceOnChildrenTerminal] = useState("");
+  const [breakdownEnabled, setBreakdownEnabled] = useState(false);
+  const [breakdownTargetPipelineId, setBreakdownTargetPipelineId] = useState("");
+  const [breakdownTargetStageKey, setBreakdownTargetStageKey] = useState("");
+  const [breakdownPieceNoun, setBreakdownPieceNoun] = useState("piece");
+  const [breakdownInheritFields, setBreakdownInheritFields] = useState<string[]>([]);
+  const [breakdownAdvanceTo, setBreakdownAdvanceTo] = useState("");
+  const [breakdownWaitForPieces, setBreakdownWaitForPieces] = useState(false);
+  const [breakdownWhenFinishedMoveTo, setBreakdownWhenFinishedMoveTo] = useState("");
   const [transitionTargets, setTransitionTargets] = useState<Set<string>>(() => new Set());
   const [deleteStageDialogOpen, setDeleteStageDialogOpen] = useState(false);
   const [deleteMoveTargetStageId, setDeleteMoveTargetStageId] = useState("");
@@ -574,6 +606,25 @@ export function PipelineSettings() {
     queryKey: selectedCompanyId ? queryKeys.access.companyUserDirectory(selectedCompanyId) : ["access", "users", "none"],
     queryFn: () => accessApi.listUserDirectory(selectedCompanyId!),
     enabled: !!selectedCompanyId,
+  });
+
+  // Other pipelines in the workspace power the "Break into pieces" target
+  // picker; their stages come back on the list payload so we can offer the
+  // entry-stage choices without a second fetch per pipeline.
+  const pipelinesListQuery = useQuery({
+    queryKey: selectedCompanyId ? queryKeys.pipelines.list(selectedCompanyId) : ["pipelines", "none"],
+    queryFn: () => pipelinesApi.list(selectedCompanyId!),
+    enabled: !!selectedCompanyId,
+  });
+
+  // The chosen target pipeline's intake form drives the "Carry over" field
+  // checkboxes — those are the variables a new piece can be stamped with.
+  const breakdownTargetIntakeQuery = useQuery({
+    queryKey: breakdownTargetPipelineId
+      ? queryKeys.pipelines.intakeForm(breakdownTargetPipelineId)
+      : ["pipelines", "intake-form", "none-breakdown"],
+    queryFn: () => pipelinesApi.getIntakeForm(breakdownTargetPipelineId),
+    enabled: !!selectedCompanyId && !!breakdownTargetPipelineId,
   });
 
   const pipeline = pipelineQuery.data ?? null;
@@ -716,6 +767,14 @@ export function PipelineSettings() {
     setRequireRejectReason(form.requireRejectReason);
     setRequireChildrenTerminal(form.requireChildrenTerminal);
     setAutoAdvanceOnChildrenTerminal(form.autoAdvanceOnChildrenTerminal);
+    setBreakdownEnabled(form.breakdownEnabled);
+    setBreakdownTargetPipelineId(form.breakdownTargetPipelineId);
+    setBreakdownTargetStageKey(form.breakdownTargetStageKey);
+    setBreakdownPieceNoun(form.breakdownPieceNoun);
+    setBreakdownInheritFields(form.breakdownInheritFields);
+    setBreakdownAdvanceTo(form.breakdownAdvanceTo);
+    setBreakdownWaitForPieces(form.breakdownWaitForPieces);
+    setBreakdownWhenFinishedMoveTo(form.breakdownWhenFinishedMoveTo);
     setTransitionTargets(new Set(form.transitionTargetIds));
   }, [pipeline?.transitions, selectedStage]);
 
@@ -768,6 +827,27 @@ export function PipelineSettings() {
         config.autoAdvanceOnChildrenTerminal = autoAdvanceOnChildrenTerminal;
       } else {
         delete config.autoAdvanceOnChildrenTerminal;
+      }
+      // "Break into pieces" folds the children gate (wait + then-move-to) into
+      // its own config block; the standalone requireChildrenTerminal /
+      // autoAdvanceOnChildrenTerminal fields are derived from it server-side, so
+      // we drop them here to avoid two competing sources of truth.
+      if (breakdownEnabled && breakdownTargetPipelineId && breakdownTargetStageKey) {
+        config.breakdown = {
+          targetPipelineId: breakdownTargetPipelineId,
+          targetStageKey: breakdownTargetStageKey,
+          pieceNoun: breakdownPieceNoun.trim() || "piece",
+          inheritFields: breakdownInheritFields,
+          waitForPieces: breakdownWaitForPieces,
+          ...(breakdownAdvanceTo ? { advanceTo: breakdownAdvanceTo } : {}),
+          ...(breakdownWaitForPieces && breakdownWhenFinishedMoveTo
+            ? { whenFinishedMoveTo: breakdownWhenFinishedMoveTo }
+            : {}),
+        };
+        delete config.requireChildrenTerminal;
+        delete config.autoAdvanceOnChildrenTerminal;
+      } else {
+        delete config.breakdown;
       }
       // The approval model replaces the legacy reviewerKind input.
       delete config.reviewerKind;
@@ -1013,6 +1093,14 @@ export function PipelineSettings() {
         requireRejectReason,
         requireChildrenTerminal,
         autoAdvanceOnChildrenTerminal,
+        breakdownEnabled,
+        breakdownTargetPipelineId,
+        breakdownTargetStageKey,
+        breakdownPieceNoun,
+        breakdownInheritFields,
+        breakdownAdvanceTo,
+        breakdownWaitForPieces,
+        breakdownWhenFinishedMoveTo,
         transitionTargetIds: [...transitionTargets].sort(),
       }
     : null;
@@ -1030,6 +1118,47 @@ export function PipelineSettings() {
       JSON.stringify(savedStageForm) !== JSON.stringify(currentStageForm)) ||
     instructionsBodyDirty ||
     variablesDirty;
+
+  // --- "Break into pieces" derived values -------------------------------
+  const breakdownTargetOptions = (pipelinesListQuery.data ?? []).filter(
+    (candidate) => candidate.id !== pipelineId && !candidate.archivedAt,
+  );
+  const breakdownTargetPipeline = breakdownTargetOptions.find((candidate) => candidate.id === breakdownTargetPipelineId)
+    ?? (pipelinesListQuery.data ?? []).find((candidate) => candidate.id === breakdownTargetPipelineId)
+    ?? null;
+  const breakdownTargetStages = [...(breakdownTargetPipeline?.stages ?? [])].sort(
+    (left, right) => left.position - right.position,
+  );
+  const breakdownEntryStage = breakdownTargetStages.find((stage) => stage.key === breakdownTargetStageKey) ?? null;
+  const breakdownInheritFieldOptions = breakdownTargetIntakeQuery.data?.fields ?? [];
+  const breakdownPieceNounPlural = pieceNounPlural(breakdownPieceNoun);
+  const stageKeyToName = new Map(stages.map((stage) => [stage.key, stage.name]));
+  const breakdownCopyNames: BreakdownCopyNames = {
+    targetPipelineName: breakdownTargetPipeline?.name ?? "",
+    entryStageName: breakdownEntryStage?.name ?? breakdownTargetStageKey,
+    advanceToName: breakdownAdvanceTo ? stageKeyToName.get(breakdownAdvanceTo) ?? breakdownAdvanceTo : null,
+    whenFinishedName: breakdownWhenFinishedMoveTo
+      ? stageKeyToName.get(breakdownWhenFinishedMoveTo) ?? breakdownWhenFinishedMoveTo
+      : null,
+    inheritedFieldLabels: breakdownInheritFields.map(
+      (key) => breakdownInheritFieldOptions.find((field) => field.key === key)?.label ?? key,
+    ),
+  };
+  const breakdownConfigForCopy = {
+    targetPipelineId: breakdownTargetPipelineId,
+    targetStageKey: breakdownTargetStageKey,
+    pieceNoun: breakdownPieceNoun.trim() || "piece",
+    inheritFields: breakdownInheritFields,
+    advanceTo: breakdownAdvanceTo || null,
+    waitForPieces: breakdownWaitForPieces,
+    whenFinishedMoveTo: breakdownWhenFinishedMoveTo || null,
+  };
+  const breakdownSummary = breakdownEnabled
+    ? breakdownSummarySentence(breakdownConfigForCopy, breakdownCopyNames)
+    : null;
+  const breakdownBullets = breakdownEnabled
+    ? breakdownMechanicsBullets(breakdownConfigForCopy, breakdownCopyNames)
+    : [];
 
   return (
     <div className="space-y-6">
@@ -1444,11 +1573,23 @@ export function PipelineSettings() {
                             <AgentIcon icon={selectedAutomationAgent.icon} className="h-4 w-4 shrink-0" />
                             <span>{selectedAutomationAgent.name} runs this step automatically.</span>
                           </div>
+                          {breakdownEnabled ? (
+                            <div className="space-y-1">
+                              <h3 className="text-sm font-semibold text-foreground">What should the agent decide?</h3>
+                              <p className="text-sm text-muted-foreground">
+                                The mechanics are handled below. Write only the judgment.
+                              </p>
+                            </div>
+                          ) : null}
                           <div data-testid="stage-instructions-editor">
                             <MarkdownEditor
                               value={instructionsBody}
                               onChange={setInstructionsBody}
-                              placeholder="Tell the agent exactly what to do when an item enters this step..."
+                              placeholder={
+                                breakdownEnabled
+                                  ? "Describe the judgment the agent should make — what counts as a piece worth splitting out?"
+                                  : "Tell the agent exactly what to do when an item enters this step..."
+                              }
                               bordered={false}
                               contentClassName="min-h-[120px] text-[15px] leading-7"
                               mentions={mentionOptions}
@@ -1459,6 +1600,29 @@ export function PipelineSettings() {
                               }}
                             />
                           </div>
+                          {breakdownEnabled && breakdownBullets.length > 0 ? (
+                            <div className="rounded-lg border border-border bg-muted/20 p-4">
+                              <h4 className="text-sm font-semibold text-foreground">Paperclip handles this</h4>
+                              <p className="mt-0.5 text-xs text-muted-foreground">
+                                Generated from the “Break into pieces” settings. Read-only — change it from the Advanced tab.
+                              </p>
+                              <ul className="mt-3 space-y-1.5 text-sm text-muted-foreground">
+                                {breakdownBullets.map((bullet, index) => (
+                                  <li key={index} className="flex gap-2">
+                                    <span aria-hidden className="text-muted-foreground">•</span>
+                                    <span>{bullet}</span>
+                                  </li>
+                                ))}
+                              </ul>
+                              <Link
+                                to={`/pipelines/${pipeline.id}/settings?stage=${selectedStage?.id ?? ""}`}
+                                className="mt-3 inline-block text-xs font-medium text-foreground hover:underline"
+                                onClick={() => setActiveStageSection("advanced")}
+                              >
+                                Edit fields in Advanced to change what Paperclip does →
+                              </Link>
+                            </div>
+                          ) : null}
                         </>
                       ) : (
                         <EmptyState
@@ -1487,7 +1651,189 @@ export function PipelineSettings() {
                   ) : null}
 
                   {activeStageSection === "advanced" && !isPipelineTerminalStageKind(stageKind) ? (
-                    <div className="w-full max-w-3xl">
+                    <div className="w-full max-w-3xl space-y-8">
+                      <div className="rounded-lg border border-border">
+                        <div className="flex items-start justify-between gap-4 border-b border-border p-4">
+                          <div className="space-y-1">
+                            <h3 className="text-sm font-semibold text-foreground">Break into smaller pieces</h3>
+                            <p className="max-w-md text-sm text-muted-foreground">
+                              The agent decides what the pieces are. Paperclip creates and tracks them.
+                            </p>
+                          </div>
+                          <ToggleSwitch
+                            aria-label="Break into smaller pieces"
+                            checked={breakdownEnabled}
+                            onCheckedChange={(checked) => {
+                              setBreakdownEnabled(checked);
+                              if (checked && !breakdownAdvanceTo) {
+                                setBreakdownAdvanceTo(defaultAutoAdvanceStage?.key ?? "");
+                              }
+                            }}
+                          />
+                        </div>
+                        {breakdownEnabled ? (
+                          <div className="divide-y divide-border px-4">
+                            <FieldRow label="Create each piece in">
+                              <div className="space-y-1">
+                                <select
+                                  aria-label="Create each piece in"
+                                  value={breakdownTargetPipelineId}
+                                  onChange={(event) => {
+                                    setBreakdownTargetPipelineId(event.target.value);
+                                    setBreakdownTargetStageKey("");
+                                    setBreakdownInheritFields([]);
+                                  }}
+                                  className="h-10 w-full max-w-sm rounded-md border border-input bg-background px-3 text-sm"
+                                >
+                                  <option value="">Choose a pipeline</option>
+                                  {breakdownTargetOptions.map((candidate) => (
+                                    <option key={candidate.id} value={candidate.id}>{candidate.name}</option>
+                                  ))}
+                                </select>
+                                <p className="text-xs text-muted-foreground">A pipeline in this workspace</p>
+                              </div>
+                            </FieldRow>
+                            <FieldRow label="starting at">
+                              <div className="space-y-1">
+                                <select
+                                  aria-label="Starting stage for each piece"
+                                  value={breakdownTargetStageKey}
+                                  onChange={(event) => setBreakdownTargetStageKey(event.target.value)}
+                                  disabled={!breakdownTargetPipelineId}
+                                  className="h-10 w-full max-w-sm rounded-md border border-input bg-background px-3 text-sm disabled:opacity-50"
+                                >
+                                  <option value="">Choose a stage</option>
+                                  {breakdownTargetStages.map((stage) => (
+                                    <option key={stage.id} value={stage.key}>{stage.name}</option>
+                                  ))}
+                                </select>
+                                <p className="text-xs text-muted-foreground">The stage every new piece starts in</p>
+                              </div>
+                            </FieldRow>
+                            <FieldRow label="Call each piece a">
+                              <div className="space-y-1">
+                                <Input
+                                  aria-label="Call each piece a"
+                                  value={breakdownPieceNoun}
+                                  onChange={(event) => setBreakdownPieceNoun(event.target.value)}
+                                  placeholder="piece"
+                                  className="h-10 w-full max-w-sm"
+                                />
+                                <p className="text-xs text-muted-foreground">
+                                  Drives copy on this case (e.g. “3 of 5 {breakdownPieceNounPlural} finished”)
+                                </p>
+                              </div>
+                            </FieldRow>
+                            <FieldRow label="Carry over">
+                              <div className="space-y-2">
+                                {breakdownInheritFieldOptions.length > 0 ? (
+                                  <div className="space-y-1.5">
+                                    {breakdownInheritFieldOptions.map((field) => {
+                                      const checked = breakdownInheritFields.includes(field.key);
+                                      return (
+                                        <label
+                                          key={field.key}
+                                          className="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm"
+                                        >
+                                          <input
+                                            type="checkbox"
+                                            checked={checked}
+                                            onChange={(event) => {
+                                              setBreakdownInheritFields((current) =>
+                                                event.target.checked
+                                                  ? [...current, field.key]
+                                                  : current.filter((key) => key !== field.key),
+                                              );
+                                            }}
+                                          />
+                                          <span className="flex-1">{field.label}</span>
+                                          {field.required ? (
+                                            <span className="text-xs text-muted-foreground">
+                                              (required by {breakdownTargetPipeline?.name ?? "destination"})
+                                            </span>
+                                          ) : null}
+                                        </label>
+                                      );
+                                    })}
+                                  </div>
+                                ) : (
+                                  <p className="text-sm text-muted-foreground">
+                                    {breakdownTargetPipelineId
+                                      ? "This pipeline has no fields to carry over yet."
+                                      : "Pick a pipeline to choose fields to carry over."}
+                                  </p>
+                                )}
+                                <p className="text-xs text-muted-foreground">
+                                  Fields from this pipeline copied onto each piece
+                                </p>
+                              </div>
+                            </FieldRow>
+                            <FieldRow label="Then move this case to">
+                              <div className="space-y-1">
+                                <select
+                                  aria-label="Then move this case to"
+                                  value={breakdownAdvanceTo}
+                                  onChange={(event) => setBreakdownAdvanceTo(event.target.value)}
+                                  className="h-10 w-full max-w-sm rounded-md border border-input bg-background px-3 text-sm"
+                                >
+                                  <option value="">Stay on this step</option>
+                                  {otherStages.map((stage) => (
+                                    <option key={stage.id} value={stage.key}>{stage.name}</option>
+                                  ))}
+                                </select>
+                                <p className="text-xs text-muted-foreground">As soon as the pieces are created</p>
+                              </div>
+                            </FieldRow>
+                            <FieldRow label="Wait">
+                              <div className="space-y-2">
+                                <label className="flex items-start gap-2 text-sm">
+                                  <input
+                                    type="checkbox"
+                                    className="mt-0.5"
+                                    checked={breakdownWaitForPieces}
+                                    onChange={(event) => {
+                                      const checked = event.target.checked;
+                                      setBreakdownWaitForPieces(checked);
+                                      if (checked && !breakdownWhenFinishedMoveTo) {
+                                        setBreakdownWhenFinishedMoveTo(breakdownAdvanceTo || defaultAutoAdvanceStage?.key || "");
+                                      }
+                                    }}
+                                  />
+                                  <span className="font-medium text-foreground">
+                                    Wait until all {breakdownPieceNounPlural} are finished, then move it to
+                                  </span>
+                                </label>
+                                <select
+                                  aria-label="Move this case when all pieces finish"
+                                  value={breakdownWhenFinishedMoveTo}
+                                  onChange={(event) => setBreakdownWhenFinishedMoveTo(event.target.value)}
+                                  disabled={!breakdownWaitForPieces}
+                                  className="h-10 w-full max-w-sm rounded-md border border-input bg-background px-3 text-sm disabled:opacity-50"
+                                >
+                                  <option value="">Choose a stage</option>
+                                  {otherStages.map((stage) => (
+                                    <option key={stage.id} value={stage.key}>{stage.name}</option>
+                                  ))}
+                                </select>
+                                {breakdownAdvanceTo ? (
+                                  <p className="text-xs text-muted-foreground">
+                                    If nothing is worth splitting, this case still moves to {breakdownCopyNames.advanceToName}.
+                                  </p>
+                                ) : null}
+                              </div>
+                            </FieldRow>
+                            {breakdownSummary ? (
+                              <div className="py-4">
+                                <p className="rounded-md bg-muted/40 p-3 text-sm text-muted-foreground">
+                                  {breakdownSummary}
+                                </p>
+                              </div>
+                            ) : null}
+                          </div>
+                        ) : null}
+                      </div>
+
+                      {breakdownEnabled ? null : (
                       <div className="divide-y divide-border border-b border-border">
                         <div className="py-3">
                           <h3 className="text-sm font-semibold text-foreground">Children</h3>
@@ -1542,6 +1888,7 @@ export function PipelineSettings() {
                           </div>
                         </FieldRow>
                       </div>
+                      )}
                     </div>
                   ) : null}
 
