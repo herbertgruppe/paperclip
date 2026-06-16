@@ -1429,6 +1429,7 @@ describeEmbeddedPostgres("pipeline routes", () => {
       },
     });
     const [executionIssue] = await db.select().from(issues).where(eq(issues.originRunId, run!.id));
+    expect(executionIssue!.title).toBe("[Pipeline: Agent fanout > Planning] Release (release): Fan out v1 shipped");
     expect(executionIssue!.description).toContain("## Pipeline Automation Preamble");
     expect(executionIssue!.description).toContain(`GET /api/cases/${parent.body.case.id}`);
     expect(executionIssue!.description).toContain("Create child work for");

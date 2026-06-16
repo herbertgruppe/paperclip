@@ -1196,6 +1196,7 @@ export function routineService(
     executionWorkspaceId?: string | null;
     executionWorkspacePreference?: string | null;
     executionWorkspaceSettings?: Record<string, unknown> | null;
+    titlePrefix?: string | null;
     descriptionPreamble?: string | null;
     descriptionAppendix?: string | null;
     actor?: Actor;
@@ -1248,7 +1249,10 @@ export function routineService(
       ...automaticVariables,
       ...resolvedVariables,
     };
-    const title = interpolateRoutineTemplate(input.routine.title, allVariables) ?? input.routine.title;
+    const interpolatedTitle = interpolateRoutineTemplate(input.routine.title, allVariables) ?? input.routine.title;
+    const title = input.titlePrefix?.trim()
+      ? `${input.titlePrefix.trim()}: ${interpolatedTitle}`
+      : interpolatedTitle;
     const baseDescription = interpolateRoutineTemplate(input.routine.description, allVariables);
     const description = [input.descriptionPreamble, baseDescription, input.descriptionAppendix]
       .filter((part): part is string => Boolean(part && part.trim()))
@@ -2291,7 +2295,11 @@ export function routineService(
 
     runPipelineStageEntryRoutine: async (
       id: string,
-      input: RunRoutine & { descriptionPreamble?: string | null; descriptionAppendix?: string | null },
+      input: RunRoutine & {
+        titlePrefix?: string | null;
+        descriptionPreamble?: string | null;
+        descriptionAppendix?: string | null;
+      },
       actor?: Actor,
     ) => {
       const routine = await getRoutineById(id);
@@ -2313,6 +2321,7 @@ export function routineService(
         executionWorkspacePreference: input.executionWorkspacePreference ?? null,
         executionWorkspaceSettings:
           (input.executionWorkspaceSettings as Record<string, unknown> | null | undefined) ?? null,
+        titlePrefix: input.titlePrefix ?? null,
         descriptionPreamble: input.descriptionPreamble ?? null,
         descriptionAppendix: input.descriptionAppendix ?? null,
         actor,

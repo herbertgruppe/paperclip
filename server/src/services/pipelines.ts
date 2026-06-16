@@ -746,6 +746,23 @@ function buildPipelineCaseVariables(input: {
   return variables;
 }
 
+function cleanPipelineIssueTitlePart(value: string | null | undefined) {
+  return (value ?? "").replace(/\s+/g, " ").trim();
+}
+
+function buildPipelineAutomationIssueTitlePrefix(input: {
+  pipeline: typeof pipelines.$inferSelect;
+  case: typeof pipelineCases.$inferSelect;
+  stage: typeof pipelineStages.$inferSelect;
+}) {
+  const pipelineName = cleanPipelineIssueTitlePart(input.pipeline.name) || input.pipeline.key;
+  const stageName = cleanPipelineIssueTitlePart(input.stage.name) || input.stage.key;
+  const caseTitle = cleanPipelineIssueTitlePart(input.case.title) || input.case.caseKey;
+  const caseKey = cleanPipelineIssueTitlePart(input.case.caseKey);
+  const caseLabel = caseKey && caseKey !== caseTitle ? `${caseTitle} (${caseKey})` : caseTitle;
+  return `[Pipeline: ${pipelineName} > ${stageName}] ${caseLabel}`;
+}
+
 function buildPipelineStageEntryPreamble(input: {
   pipeline: typeof pipelines.$inferSelect;
   case: typeof pipelineCases.$inferSelect;
@@ -1895,6 +1912,7 @@ export function pipelineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeu
           variables,
         },
         variables,
+        titlePrefix: buildPipelineAutomationIssueTitlePrefix(detail),
         descriptionPreamble: buildPipelineStageEntryPreamble({
           ...detail,
           breakdownMechanics,

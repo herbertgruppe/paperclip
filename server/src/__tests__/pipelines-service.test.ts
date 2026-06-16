@@ -2085,6 +2085,7 @@ describeEmbeddedPostgres("pipelineService", () => {
     expect(linksAfterTransition[0]!.role).toBe("automation");
 
     const [issue] = await db.select().from(issues).where(eq(issues.id, ledgers[0]!.executionIssueId!));
+    expect(issue!.title).toBe("[Pipeline: Automation > Drafting] Automation case (automation): Draft on enter");
     expect(issue!.description).toContain("Pipeline Item Context");
     expect(issue!.description).toContain("untrustedContent");
 
@@ -2169,6 +2170,8 @@ describeEmbeddedPostgres("pipelineService", () => {
     expect(ledgers[0]!.executionIssueId).toBeTruthy();
     const runs = await db.select().from(routineRuns);
     expect(runs).toHaveLength(1);
+    const [issue] = await db.select().from(issues).where(eq(issues.id, ledgers[0]!.executionIssueId!));
+    expect(issue!.title).toBe("[Pipeline: Direct automation > Drafting] Direct case (direct): Direct ingest automation");
     const links = await db.select().from(pipelineCaseIssueLinks);
     expect(links).toHaveLength(1);
     expect(links[0]).toMatchObject({ caseId: created.case.id, issueId: ledgers[0]!.executionIssueId, role: "automation" });
