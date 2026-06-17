@@ -72,6 +72,17 @@ const mockIssueRecoveryActionService = vi.hoisted(() => ({
   listActiveForIssues: vi.fn(async () => new Map()),
   resolveActiveForIssue: vi.fn(async () => null),
 }));
+const mockTaskWatchdogService = vi.hoisted(() => ({
+  getActiveForIssue: vi.fn(async () => null),
+  reconcileForIssueAndAncestors: vi.fn(async () => ({
+    checked: 0,
+    triggered: 0,
+    skipped: 0,
+    watchdogIssueIds: [],
+  })),
+  upsertForIssue: vi.fn(),
+  disableForIssue: vi.fn(async () => null),
+}));
 const mockHeartbeatService = vi.hoisted(() => ({
   wakeup: vi.fn(async () => undefined),
   reportRunActivity: vi.fn(async () => undefined),
@@ -158,6 +169,7 @@ function registerRouteMocks() {
     }),
     issueService: () => mockIssueService,
     issueThreadInteractionService: () => mockIssueThreadInteractionService,
+    taskWatchdogService: () => mockTaskWatchdogService,
     logActivity: vi.fn(async () => undefined),
     projectService: () => ({}),
     routineService: () => ({
@@ -385,6 +397,18 @@ describe("agent issue mutation checkout ownership", () => {
       createdAt: new Date("2026-05-13T17:55:00.000Z"),
       updatedAt: new Date("2026-05-13T18:05:00.000Z"),
     });
+    mockTaskWatchdogService.getActiveForIssue.mockReset();
+    mockTaskWatchdogService.getActiveForIssue.mockResolvedValue(null);
+    mockTaskWatchdogService.reconcileForIssueAndAncestors.mockReset();
+    mockTaskWatchdogService.reconcileForIssueAndAncestors.mockResolvedValue({
+      checked: 0,
+      triggered: 0,
+      skipped: 0,
+      watchdogIssueIds: [],
+    });
+    mockTaskWatchdogService.upsertForIssue.mockReset();
+    mockTaskWatchdogService.disableForIssue.mockReset();
+    mockTaskWatchdogService.disableForIssue.mockResolvedValue(null);
     mockHeartbeatService.wakeup.mockReset();
     mockHeartbeatService.wakeup.mockResolvedValue(undefined);
     mockHeartbeatService.reportRunActivity.mockReset();
