@@ -2303,7 +2303,7 @@ describeEmbeddedPostgres("pipeline routes", () => {
     expect(description).toContain(`---\n\nCreate child work for ${parent.body.case.id}.\n\n---`);
     expect(description).toContain("`pipeline-case-operations`");
     expect(description).toContain(`- case_id: ${parent.body.case.id}`);
-    expect(description).toContain("- release_notes: v1 shipped");
+    expect(description).toContain(`- "release_notes": "v1 shipped"`);
     expect(description.match(/```json/g)).toHaveLength(1);
     expect(description).not.toContain("{pipelineId}");
 
