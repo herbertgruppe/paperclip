@@ -66,6 +66,7 @@ const mockStorageService = vi.hoisted(() => ({
 const mockIssueThreadInteractionService = vi.hoisted(() => ({
   expireRequestConfirmationsSupersededByComment: vi.fn(async () => []),
   expireStaleRequestConfirmationsForIssueDocument: vi.fn(async () => []),
+  listForIssue: vi.fn(async () => []),
 }));
 const mockIssueRecoveryActionService = vi.hoisted(() => ({
   getActiveForIssue: vi.fn(async () => null),
@@ -419,6 +420,8 @@ describe("agent issue mutation checkout ownership", () => {
     mockHeartbeatService.getActiveRunForAgent.mockResolvedValue(null);
     mockHeartbeatService.cancelRun.mockReset();
     mockHeartbeatService.cancelRun.mockResolvedValue(null);
+    mockIssueThreadInteractionService.listForIssue.mockReset();
+    mockIssueThreadInteractionService.listForIssue.mockResolvedValue([]);
     mockIssueService.remove.mockReset();
     mockIssueService.removeAttachment.mockReset();
     mockIssueService.update.mockReset();
@@ -1170,5 +1173,219 @@ describe("agent issue mutation checkout ownership", () => {
       }),
     }));
     expect(mockIssueService.update).not.toHaveBeenCalled();
+  });
+
+  describe("task watchdog scope grants", () => {
+    const watchdogRunId = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaab";
+    const watchdogReportIssueId = "cccccccc-cccc-4ccc-8ccc-cccccccccccd";
+
+    // The watchdog agent (peerAgentId) is NOT the assignee of the watched issue
+    // (ownerAgentId), so the base authorization boundary (issue:mutate) denies.
+    // The watchdog scope must grant the mutation regardless.
+    function watchdogActor(runId: string = watchdogRunId) {
+      return {
+        type: "agent",
+        agentId: peerAgentId,
+        companyId,
+        source: "agent_key",
+        runId,
+      };
+    }
+
+    function createWatchdogDb(options: {
+      watchedIssueId?: string;
+      watchdogIssueId?: string | null;
+      ancestryParentId?: string | null;
+      watchdogRows?: Record<string, unknown>[];
+    } = {}) {
+      const watchedIssueId = options.watchedIssueId ?? issueId;
+      const runRows = [{
+        id: watchdogRunId,
+        companyId,
+        agentId: peerAgentId,
+        contextSnapshot: { taskWatchdog: { watchedIssueId } },
+      }];
+      const watchdogRows = options.watchdogRows ?? [{
+        id: "dddddddd-dddd-4ddd-8ddd-ddddddddddde",
+        companyId,
+        issueId: watchedIssueId,
+        watchdogAgentId: peerAgentId,
+        watchdogIssueId: options.watchdogIssueId ?? watchdogReportIssueId,
+        status: "active",
+      }];
+      const ancestryRows = [{
+        id: "ancestry",
+        companyId,
+        parentId: options.ancestryParentId ?? null,
+      }];
+      const rowsForSelection = (selection: Record<string, unknown>) => {
+        const keys = Object.keys(selection);
+        if (keys.includes("entityId")) return [];
+        if (keys.includes("contextSnapshot")) return runRows;
+        if (keys.includes("watchdogAgentId")) return watchdogRows;
+        if (keys.includes("parentId")) return ancestryRows;
+        if (keys.includes("agentCompanyId")) return runRows;
+        return [{ id: peerAgentId, companyId, permissions: {}, role: "engineer", reportsTo: null }];
+      };
+      const buildQuery = (selection: Record<string, unknown>) => {
+        const whereResult = {
+          orderBy: vi.fn(async () => []),
+          then: async (resolve: (rows: unknown[]) => unknown) => resolve(rowsForSelection(selection)),
+        };
+        const query = {
+          innerJoin: vi.fn(() => query),
+          where: vi.fn(() => whereResult),
+        };
+        return query;
+      };
+      return {
+        transaction: async (callback: (tx: Record<string, never>) => Promise<unknown>) => callback({}),
+        select: vi.fn((selection: Record<string, unknown> = {}) => ({
+          from: vi.fn(() => buildQuery(selection)),
+        })),
+      };
+    }
+
+    // The base boundary always denies a cross-agent issue:mutate; only the
+    // watchdog scope can widen access. Denying it here proves the grant works.
+    function denyBaseBoundary() {
+      mockAccessService.decide.mockImplementation(async (input: { action: string }) => ({
+        allowed: input.action === "company_scope:read" || input.action === "tasks:assign",
+        action: input.action,
+        reason:
+          input.action === "company_scope:read" || input.action === "tasks:assign"
+            ? "allow_explicit_grant"
+            : "deny_missing_grant",
+        explanation: "Watchdog test boundary default.",
+      }));
+    }
+
+    it("lets a watchdog run comment on a watched issue assigned to a different agent", async () => {
+      denyBaseBoundary();
+      mockIssueService.getById.mockResolvedValue(makeIssue({ assigneeAgentId: ownerAgentId }));
+
+      const app = await createApp(watchdogActor(), createWatchdogDb());
+      const res = await request(app).post(`/api/issues/${issueId}/comments`).send({ body: "Watchdog finding" });
+
+      expect(res.status, JSON.stringify(res.body)).toBe(201);
+      expect(mockIssueService.addComment).toHaveBeenCalledWith(
+        issueId,
+        "Watchdog finding",
+        expect.any(Object),
+        expect.any(Object),
+      );
+    });
+
+    it.each([
+      ["in_progress"],
+      ["blocked"],
+      ["todo"],
+    ])("lets a watchdog run transition a watched issue to %s", async (status) => {
+      denyBaseBoundary();
+      mockIssueService.getById.mockResolvedValue(makeIssue({ status: "in_progress", assigneeAgentId: ownerAgentId }));
+      mockIssueService.update.mockImplementation(async (_id: string, patch: Record<string, unknown>) => ({
+        ...makeIssue({ assigneeAgentId: ownerAgentId }),
+        ...patch,
+      }));
+
+      const app = await createApp(watchdogActor(), createWatchdogDb());
+      const res = await request(app).patch(`/api/issues/${issueId}`).send({ status });
+
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      expect(mockIssueService.update).toHaveBeenCalledWith(issueId, expect.objectContaining({ status }));
+    });
+
+    it("lets a watchdog run transition a watched issue to in_review with a live review path", async () => {
+      denyBaseBoundary();
+      mockIssueService.getById.mockResolvedValue(makeIssue({ status: "in_progress", assigneeAgentId: ownerAgentId }));
+      mockIssueService.update.mockImplementation(async (_id: string, patch: Record<string, unknown>) => ({
+        ...makeIssue({ assigneeAgentId: ownerAgentId }),
+        ...patch,
+      }));
+      // A pending interaction is a valid review path, so the agent in_review guard
+      // is satisfied — this isolates the test to the watchdog boundary grant.
+      mockIssueThreadInteractionService.listForIssue.mockResolvedValue([{ status: "pending" }] as never);
+
+      const app = await createApp(watchdogActor(), createWatchdogDb());
+      const res = await request(app).patch(`/api/issues/${issueId}`).send({ status: "in_review" });
+
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      expect(mockIssueService.update).toHaveBeenCalledWith(issueId, expect.objectContaining({ status: "in_review" }));
+    });
+
+    it("lets a watchdog run reassign a watched issue to an active same-company agent", async () => {
+      denyBaseBoundary();
+      mockIssueService.getById.mockResolvedValue(makeIssue({ assigneeAgentId: ownerAgentId }));
+      mockIssueService.update.mockImplementation(async (_id: string, patch: Record<string, unknown>) => ({
+        ...makeIssue({ assigneeAgentId: ownerAgentId }),
+        ...patch,
+      }));
+      mockAgentService.resolveByReference.mockResolvedValue({ ambiguous: false, agent: makeAgent(peerAgentId) });
+
+      const app = await createApp(watchdogActor(), createWatchdogDb());
+      const res = await request(app).patch(`/api/issues/${issueId}`).send({ assigneeAgentId: peerAgentId });
+
+      expect(res.status, JSON.stringify(res.body)).toBe(200);
+      expect(mockIssueService.update).toHaveBeenCalledWith(
+        issueId,
+        expect.objectContaining({ assigneeAgentId: peerAgentId }),
+      );
+    });
+
+    it("still denies a watchdog run mutating an issue outside the watched subtree", async () => {
+      denyBaseBoundary();
+      mockIssueService.getById.mockResolvedValue(makeIssue({ assigneeAgentId: ownerAgentId }));
+
+      // The watched issue is a different issue, and the target's ancestry chain
+      // (parentId === null) never reaches it, so it is outside the subtree.
+      const outsideWatched = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeef";
+      const app = await createApp(
+        watchdogActor(),
+        createWatchdogDb({ watchedIssueId: outsideWatched, ancestryParentId: null }),
+      );
+      const res = await request(app).patch(`/api/issues/${issueId}`).send({ status: "blocked" });
+
+      expect(res.status, JSON.stringify(res.body)).toBe(403);
+      expect(res.body.error).toBe("Task-watchdog runs can only mutate the watched issue subtree.");
+      expect(mockIssueService.update).not.toHaveBeenCalled();
+    });
+
+    it("still enforces normal assignment guards for watchdog reassignment", async () => {
+      // Base boundary denied AND tasks:assign denied: the watchdog grant lets the
+      // mutation past the ownership boundary, but the assignment guard must still bite.
+      mockAccessService.decide.mockImplementation(async (input: { action: string }) => ({
+        allowed: input.action === "company_scope:read",
+        action: input.action,
+        reason: input.action === "company_scope:read" ? "allow_explicit_grant" : "deny_policy_restricted",
+        explanation:
+          input.action === "tasks:assign"
+            ? "Target agent requires approval before task assignment."
+            : "Watchdog test boundary default.",
+      }));
+      mockIssueService.getById.mockResolvedValue(makeIssue({ assigneeAgentId: ownerAgentId }));
+      mockAgentService.resolveByReference.mockResolvedValue({ ambiguous: false, agent: makeAgent(peerAgentId) });
+
+      const app = await createApp(watchdogActor(), createWatchdogDb());
+      const res = await request(app).patch(`/api/issues/${issueId}`).send({ assigneeAgentId: peerAgentId });
+
+      expect(res.status, JSON.stringify(res.body)).toBe(403);
+      expect(res.body.error).toContain("requires approval");
+      expect(mockIssueService.update).not.toHaveBeenCalled();
+    });
+
+    it("denies an invalid watchdog run context even when the base boundary would allow it", async () => {
+      // Run context claims a watched issue, but no active persisted watchdog backs it.
+      const app = await createApp(
+        watchdogActor(),
+        createWatchdogDb({ watchdogRows: [] }),
+      );
+      mockIssueService.getById.mockResolvedValue(makeIssue({ assigneeAgentId: peerAgentId }));
+
+      const res = await request(app).patch(`/api/issues/${issueId}`).send({ status: "blocked" });
+
+      expect(res.status, JSON.stringify(res.body)).toBe(403);
+      expect(res.body.error).toBe("Task-watchdog run context is not backed by an active persisted watchdog.");
+      expect(mockIssueService.update).not.toHaveBeenCalled();
+    });
   });
 });
