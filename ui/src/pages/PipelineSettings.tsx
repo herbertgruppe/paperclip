@@ -416,11 +416,8 @@ function nextStageForInsert(stages: PipelineStage[], position: number) {
 }
 
 function stageNavGroups(kind: string): typeof STAGE_NAV_GROUPS {
-  if (!isPipelineTerminalStageKind(kind)) return STAGE_NAV_GROUPS;
-  return STAGE_NAV_GROUPS.map((group) => ({
-    ...group,
-    items: group.items.filter((item) => item.id !== "advanced"),
-  })).filter((group) => group.items.length > 0);
+  void kind;
+  return STAGE_NAV_GROUPS;
 }
 
 function defaultReviewTarget(stages: PipelineStage[], selectedStageId: string | null, kind: string) {
@@ -614,6 +611,7 @@ export function PipelineSettings() {
   const [deleteMoveTargetStageId, setDeleteMoveTargetStageId] = useState("");
   const [pipelineName, setPipelineName] = useState("");
   const [pipelineDescription, setPipelineDescription] = useState("");
+  const [strictTransitionsEnabled, setStrictTransitionsEnabled] = useState(false);
   const [archiveConfirmation, setArchiveConfirmation] = useState("");
   const [archiveDialogOpen, setArchiveDialogOpen] = useState(false);
 
@@ -863,6 +861,7 @@ export function PipelineSettings() {
     if (!pipeline) return;
     setPipelineName(pipeline.name);
     setPipelineDescription(pipeline.description ?? "");
+    setStrictTransitionsEnabled(pipeline.enforceTransitions);
   }, [pipeline]);
 
   const refreshPipeline = async () => {
@@ -943,15 +942,17 @@ export function PipelineSettings() {
         });
       // Effective "allowed next steps". For review stages the connections are
       // kept in sync with the review outcomes (approve / decline / changes)
-      // instead of a separate picker. Every stage can always move to a
-      // cancelled stage by default.
+      // instead of a separate picker. For non-review stages, manual transition
+      // edges are only edited while strict transition enforcement is enabled.
       const keyToId = new Map(stages.map((stage) => [stage.key, stage.id]));
       const effectiveTargetIds = new Set<string>(
         stageKind === "review"
           ? [approveTarget, rejectTarget, requestChangesTarget]
               .map((key) => keyToId.get(key))
               .filter((id): id is string => Boolean(id))
-          : transitionTargets,
+          : strictTransitionsEnabled
+            ? transitionTargets
+            : [],
       );
       for (const stage of stages) {
         if (stage.kind === "cancelled" && stage.id !== selectedStage.id) {
@@ -972,9 +973,11 @@ export function PipelineSettings() {
         kind: stageKind,
         config,
       });
-      await pipelinesApi.setTransitions(pipelineId, {
-        transitions: dedupeEdges([...retainedEdges, ...selectedEdges]),
-      });
+      if (stageKind === "review" || strictTransitionsEnabled) {
+        await pipelinesApi.setTransitions(pipelineId, {
+          transitions: dedupeEdges([...retainedEdges, ...selectedEdges]),
+        });
+      }
       return null;
     },
     onSuccess: async () => {
@@ -1121,6 +1124,23 @@ export function PipelineSettings() {
     },
   });
 
+  const saveStrictTransitions = useMutation({
+    mutationFn: (enforceTransitions: boolean) =>
+      pipelinesApi.update(pipelineId!, { enforceTransitions }),
+    onSuccess: async () => {
+      await refreshPipeline();
+      pushToast({ title: "Transition rules updated", tone: "success" });
+    },
+    onError: (error) => {
+      setStrictTransitionsEnabled(pipeline?.enforceTransitions ?? false);
+      pushToast({
+        title: "Failed to update transition rules",
+        body: error instanceof Error ? error.message : "Paperclip could not update transition rules.",
+        tone: "error",
+      });
+    },
+  });
+
   const archivePipeline = useMutation({
     mutationFn: (archived: boolean) => pipelinesApi.update(pipelineId!, { archived }),
     onSuccess: async (_result, archived) => {
@@ -1140,9 +1160,6 @@ export function PipelineSettings() {
 
   const setStageKindWithDefaults = (kind: string) => {
     setStageKind(kind);
-    if (isPipelineTerminalStageKind(kind) && activeStageSection === "advanced") {
-      setActiveStageSection("instructions");
-    }
     if (kind === "review") {
       setApproveTarget((current) => current || defaultReviewTarget(stages, selectedStage?.id ?? null, "done"));
       setRejectTarget((current) => current || defaultReviewTarget(stages, selectedStage?.id ?? null, "cancelled"));
@@ -1268,6 +1285,44 @@ export function PipelineSettings() {
   const breakdownSummary = breakdownEnabled
     ? breakdownSummarySentence(breakdownConfigForCopy, breakdownCopyNames)
     : null;
+  const transitionTargetsControl = !isReviewStage && !isPipelineTerminalStageKind(stageKind) ? (
+    <FieldRow label="Allowed next steps">
+      <div className="space-y-2">
+        {otherStages.map((stage) => {
+          const isCancelled = stage.kind === "cancelled";
+          const checked = isCancelled || transitionTargets.has(stage.id);
+          return (
+            <label
+              key={stage.id}
+              className={cn(
+                "flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm",
+                isCancelled && "text-muted-foreground",
+              )}
+            >
+              <input
+                type="checkbox"
+                checked={checked}
+                disabled={isCancelled}
+                onChange={(event) => {
+                  if (isCancelled) return;
+                  setTransitionTargets((current) => {
+                    const next = new Set(current);
+                    if (event.target.checked) next.add(stage.id);
+                    else next.delete(stage.id);
+                    return next;
+                  });
+                }}
+              />
+              <span className="flex-1">{stage.name}</span>
+              {isCancelled ? (
+                <span className="text-xs text-muted-foreground">Always available</span>
+              ) : null}
+            </label>
+          );
+        })}
+      </div>
+    </FieldRow>
+  ) : null;
   const breakdownSettingsCard = !isPipelineTerminalStageKind(stageKind) ? (
     <div className="rounded-lg border border-border">
       <div className="flex items-start justify-between gap-4 border-b border-border p-4">
@@ -1805,44 +1860,6 @@ export function PipelineSettings() {
                           </FieldRow>
                         ) : null}
 
-                        {isReviewStage || isPipelineTerminalStageKind(stageKind) ? null : (
-                          <FieldRow label="Allowed next steps">
-                            <div className="space-y-2">
-                              {otherStages.map((stage) => {
-                                const isCancelled = stage.kind === "cancelled";
-                                const checked = isCancelled || transitionTargets.has(stage.id);
-                                return (
-                                  <label
-                                    key={stage.id}
-                                    className={cn(
-                                      "flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm",
-                                      isCancelled && "text-muted-foreground",
-                                    )}
-                                  >
-                                    <input
-                                      type="checkbox"
-                                      checked={checked}
-                                      disabled={isCancelled}
-                                      onChange={(event) => {
-                                        if (isCancelled) return;
-                                        setTransitionTargets((current) => {
-                                          const next = new Set(current);
-                                          if (event.target.checked) next.add(stage.id);
-                                          else next.delete(stage.id);
-                                          return next;
-                                        });
-                                      }}
-                                    />
-                                    <span className="flex-1">{stage.name}</span>
-                                    {isCancelled ? (
-                                      <span className="text-xs text-muted-foreground">Always available</span>
-                                    ) : null}
-                                  </label>
-                                );
-                              })}
-                            </div>
-                          </FieldRow>
-                        )}
                       </div>
                     </div>
                   ) : null}
@@ -1991,68 +2008,97 @@ export function PipelineSettings() {
                     </div>
                   ) : null}
 
-                  {activeStageSection === "advanced" && !isPipelineTerminalStageKind(stageKind) ? (
+                  {activeStageSection === "advanced" ? (
                     <div className="w-full max-w-3xl space-y-8">
-                      {breakdownEnabled ? (
+                      <div className="divide-y divide-border border-b border-border">
+                        <div className="py-3">
+                          <h3 className="text-sm font-semibold text-foreground">Transitions</h3>
+                        </div>
+                        <FieldRow label="Strict mode">
+                          <div className="space-y-1.5">
+                            <div className="flex items-center gap-3">
+                              <ToggleSwitch
+                                aria-label="Strictly enforce transitions"
+                                checked={strictTransitionsEnabled}
+                                disabled={saveStrictTransitions.isPending}
+                                onCheckedChange={(checked) => {
+                                  setStrictTransitionsEnabled(checked);
+                                  saveStrictTransitions.mutate(checked);
+                                }}
+                              />
+                              <span className="text-sm font-medium text-foreground">
+                                Strictly enforce transitions
+                              </span>
+                            </div>
+                            <p className="max-w-2xl text-sm text-muted-foreground">
+                              {strictTransitionsEnabled
+                                ? "Items can only move to configured next steps. Operators can force an off-path move by giving a reason."
+                                : "Items can move to any step. Saved allowed-next-step choices are kept, but they are not enforced."}
+                            </p>
+                          </div>
+                        </FieldRow>
+                        {strictTransitionsEnabled ? transitionTargetsControl : null}
+                      </div>
+                      {isPipelineTerminalStageKind(stageKind) ? null : breakdownEnabled ? (
                         <EmptyState
                           icon={SlidersHorizontal}
                           message="Advanced child settings are hidden while Break into smaller pieces is enabled. Configure that workflow in Automation."
                         />
                       ) : (
-                      <div className="divide-y divide-border border-b border-border">
-                        <div className="py-3">
-                          <h3 className="text-sm font-semibold text-foreground">Children</h3>
+                        <div className="divide-y divide-border border-b border-border">
+                          <div className="py-3">
+                            <h3 className="text-sm font-semibold text-foreground">Children</h3>
+                          </div>
+                          <FieldRow label="Block children">
+                            <div className="space-y-1.5">
+                              <div className="flex items-center gap-3">
+                                <ToggleSwitch
+                                  checked={requireChildrenTerminal}
+                                  onCheckedChange={setRequireChildrenTerminal}
+                                />
+                                <span className="text-sm font-medium text-foreground">
+                                  Block until all child items are done or cancelled
+                                </span>
+                              </div>
+                              <p className="max-w-2xl text-sm text-muted-foreground">
+                                When on, this step can't move forward while any child item is still open. When off, items can move through even with open children.
+                              </p>
+                            </div>
+                          </FieldRow>
+                          <FieldRow label="Advance children">
+                            <div className="space-y-3">
+                              <div className="flex items-center gap-3">
+                                <ToggleSwitch
+                                  checked={Boolean(autoAdvanceOnChildrenTerminal)}
+                                  onCheckedChange={(checked) => {
+                                    setAutoAdvanceOnChildrenTerminal(checked ? autoAdvanceOnChildrenTerminal || defaultAutoAdvanceStage?.key || "" : "");
+                                  }}
+                                />
+                                <span className="text-sm font-medium text-foreground">
+                                  Advance when the last child is done
+                                </span>
+                              </div>
+                              <div className="grid grid-cols-1 items-center gap-2 sm:grid-cols-[5rem_240px]">
+                                <span className="text-sm font-medium text-muted-foreground">Move to</span>
+                                <select
+                                  aria-label="Move to stage when children finish"
+                                  value={autoAdvanceOnChildrenTerminal}
+                                  onChange={(event) => setAutoAdvanceOnChildrenTerminal(event.target.value)}
+                                  disabled={!autoAdvanceOnChildrenTerminal}
+                                  className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm disabled:opacity-50"
+                                >
+                                  <option value="">Choose a stage</option>
+                                  {otherStages.map((stage) => (
+                                    <option key={stage.id} value={stage.key}>{stage.name}</option>
+                                  ))}
+                                </select>
+                              </div>
+                              <p className="max-w-2xl text-sm text-muted-foreground">
+                                When on and every child is done, this step moves the item forward automatically. When off, someone has to move it.
+                              </p>
+                            </div>
+                          </FieldRow>
                         </div>
-                        <FieldRow label="Block children">
-                          <div className="space-y-1.5">
-                            <div className="flex items-center gap-3">
-                              <ToggleSwitch
-                                checked={requireChildrenTerminal}
-                                onCheckedChange={setRequireChildrenTerminal}
-                              />
-                              <span className="text-sm font-medium text-foreground">
-                                Block until all child items are done or cancelled
-                              </span>
-                            </div>
-                            <p className="max-w-2xl text-sm text-muted-foreground">
-                              When on, this step can't move forward while any child item is still open. When off, items can move through even with open children.
-                            </p>
-                          </div>
-                        </FieldRow>
-                        <FieldRow label="Advance children">
-                          <div className="space-y-3">
-                            <div className="flex items-center gap-3">
-                              <ToggleSwitch
-                                checked={Boolean(autoAdvanceOnChildrenTerminal)}
-                                onCheckedChange={(checked) => {
-                                  setAutoAdvanceOnChildrenTerminal(checked ? autoAdvanceOnChildrenTerminal || defaultAutoAdvanceStage?.key || "" : "");
-                                }}
-                              />
-                              <span className="text-sm font-medium text-foreground">
-                                Advance when the last child is done
-                              </span>
-                            </div>
-                            <div className="grid grid-cols-1 items-center gap-2 sm:grid-cols-[5rem_240px]">
-                              <span className="text-sm font-medium text-muted-foreground">Move to</span>
-                              <select
-                                aria-label="Move to stage when children finish"
-                                value={autoAdvanceOnChildrenTerminal}
-                                onChange={(event) => setAutoAdvanceOnChildrenTerminal(event.target.value)}
-                                disabled={!autoAdvanceOnChildrenTerminal}
-                                className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm disabled:opacity-50"
-                              >
-                                <option value="">Choose a stage</option>
-                                {otherStages.map((stage) => (
-                                  <option key={stage.id} value={stage.key}>{stage.name}</option>
-                                ))}
-                              </select>
-                            </div>
-                            <p className="max-w-2xl text-sm text-muted-foreground">
-                              When on and every child is done, this step moves the item forward automatically. When off, someone has to move it.
-                            </p>
-                          </div>
-                        </FieldRow>
-                      </div>
                       )}
                     </div>
                   ) : null}

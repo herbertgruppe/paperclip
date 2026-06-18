@@ -554,6 +554,112 @@ describe("PipelineSettings", () => {
     queryClient.clear();
   });
 
+  it("keeps allowed-next-step controls out of the primary Automation flow", async () => {
+    const { container, root, queryClient } = renderSettings();
+    await flushQueries();
+
+    expect(Array.from(container.querySelectorAll("h2")).map((heading) => heading.textContent ?? "")).toContain("Automation");
+    expect(container.textContent).not.toContain("Allowed next steps");
+
+    flushSync(() => {
+      findButton(container, "Advanced")!.click();
+    });
+
+    expect(container.textContent).toContain("Strictly enforce transitions");
+    expect(container.textContent).toContain(
+      "Saved allowed-next-step choices are kept, but they are not enforced.",
+    );
+    expect(container.textContent).not.toContain("Allowed next steps");
+
+    flushSync(() => {
+      root.unmount();
+    });
+    queryClient.clear();
+  });
+
+  it("persists strict transition enforcement and reveals saved transition edges", async () => {
+    const { container, root, queryClient } = renderSettings();
+    await flushQueries();
+
+    flushSync(() => {
+      findButton(container, "Advanced")!.click();
+    });
+
+    const strictToggle = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Strictly enforce transitions"]',
+    )!;
+    expect(strictToggle).toBeTruthy();
+    expect(strictToggle.getAttribute("aria-checked")).toBe("false");
+
+    flushSync(() => {
+      strictToggle.click();
+    });
+    await flushQueries();
+
+    expect(pipelinesApi.update).toHaveBeenCalledWith("pipeline-1", { enforceTransitions: true });
+    expect(strictToggle.getAttribute("aria-checked")).toBe("true");
+    expect(container.textContent).toContain("Allowed next steps");
+
+    const reviewTransition = Array.from(container.querySelectorAll("label")).find((label) =>
+      label.textContent?.includes("Review"),
+    );
+    expect(reviewTransition).toBeTruthy();
+    expect(reviewTransition!.querySelector<HTMLInputElement>('input[type="checkbox"]')?.checked).toBe(true);
+
+    flushSync(() => {
+      root.unmount();
+    });
+    queryClient.clear();
+  });
+
+  it("turns strict mode off without clearing saved transition edges on stage save", async () => {
+    const strictPipeline = makePipeline();
+    strictPipeline.enforceTransitions = true;
+    vi.mocked(pipelinesApi.get).mockResolvedValue(strictPipeline);
+
+    const { container, root, queryClient } = renderSettings();
+    await flushQueries();
+
+    flushSync(() => {
+      findButton(container, "Advanced")!.click();
+    });
+
+    expect(container.textContent).toContain("Allowed next steps");
+    const strictToggle = container.querySelector<HTMLButtonElement>(
+      'button[aria-label="Strictly enforce transitions"]',
+    )!;
+    flushSync(() => {
+      strictToggle.click();
+    });
+    await flushQueries();
+
+    expect(pipelinesApi.update).toHaveBeenCalledWith("pipeline-1", { enforceTransitions: false });
+    expect(container.textContent).not.toContain("Allowed next steps");
+
+    flushSync(() => {
+      findButton(container, "Automation")!.click();
+    });
+    const editor = container.querySelector<HTMLTextAreaElement>('[aria-label="Stage instructions"]')!;
+    flushSync(() => {
+      setNativeValue(editor, "Collect updated requests.");
+    });
+    await flushQueries();
+
+    const saveButton = findButton(container, "Save stage")!;
+    flushSync(() => {
+      saveButton.click();
+    });
+    await flushQueries();
+
+    expect(pipelinesApi.updateStage).toHaveBeenCalled();
+    expect(pipelinesApi.setTransitions).not.toHaveBeenCalled();
+
+    flushSync(() => {
+      root.unmount();
+    });
+    queryClient.clear();
+  });
+
   it("hides generated breakdown mechanics and explains the empty Advanced tab", async () => {
     const pipeline = makePipeline();
     pipeline.stages = pipeline.stages.map((stage) =>
