@@ -13,7 +13,7 @@ import type {
   SecretVersionSelector,
   SshEnvironmentConfig,
 } from "@paperclipai/shared";
-import { unprocessable } from "../errors.js";
+import { forbidden, unprocessable } from "../errors.js";
 import { parseObject } from "../adapters/utils.js";
 import { secretService } from "./secrets.js";
 import {
@@ -267,6 +267,7 @@ async function resolveConfigSecretRefsForRuntime(input: {
 async function resolveConfigSecretRefsForProbe(input: {
   db: Db;
   companyId: string;
+  actorType: "board" | "agent";
   config: Record<string, unknown>;
   schema: Record<string, unknown> | null;
 }): Promise<Record<string, unknown>> {
@@ -277,6 +278,9 @@ async function resolveConfigSecretRefsForProbe(input: {
     if (typeof current !== "string") continue;
     const trimmed = current.trim();
     if (!isUuidSecretRef(trimmed)) continue;
+    if (input.actorType !== "board") {
+      throw forbidden("Agent authentication cannot resolve unbound secret refs for unsaved probes");
+    }
     // Unsaved draft probes do not have an environment record yet, so they
     // cannot rely on environment-bound secret resolution. Resolve directly for
     // this ephemeral board-only probe and never persist the plaintext value.
@@ -364,6 +368,7 @@ export function normalizeEnvironmentConfig(input: {
 export function normalizeEnvironmentConfigForProbe(input: {
   db: Db;
   companyId: string;
+  actorType: "board" | "agent";
   driver: EnvironmentDriver;
   config: Record<string, unknown> | null | undefined;
   pluginWorkerManager?: PluginWorkerManager;
@@ -401,6 +406,7 @@ export function normalizeEnvironmentConfigForProbe(input: {
       ...(await resolveConfigSecretRefsForProbe({
         db: input.db,
         companyId: input.companyId,
+        actorType: input.actorType,
         config: validated.normalizedConfig,
         schema:
           validated.driver.configSchema &&

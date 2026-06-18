@@ -1476,4 +1476,65 @@ describe("environment routes", () => {
     );
     expect(JSON.stringify(mockLogActivity.mock.calls[0][1].details)).not.toContain("resolved-provider-key");
   });
+
+  it("rejects agent probe requests that try to resolve unbound secret refs", async () => {
+    mockAgentService.getById.mockResolvedValue({
+      id: "agent-1",
+      companyId: "company-1",
+      role: "engineer",
+      permissions: { canCreateAgents: false },
+    });
+    mockAccessService.hasPermission.mockResolvedValue(true);
+    mockValidatePluginSandboxProviderConfig.mockResolvedValue({
+      normalizedConfig: {
+        template: "base",
+        apiKey: "11111111-1111-1111-1111-111111111111",
+        timeoutMs: 300000,
+        reuseLease: true,
+      },
+      pluginId: "plugin-secure",
+      pluginKey: "acme.secure-sandbox-provider",
+      driver: {
+        driverKey: "secure-plugin",
+        kind: "sandbox_provider",
+        displayName: "Secure Sandbox",
+        configSchema: {
+          type: "object",
+          properties: {
+            template: { type: "string" },
+            apiKey: { type: "string", format: "secret-ref" },
+            timeoutMs: { type: "number" },
+            reuseLease: { type: "boolean" },
+          },
+        },
+      },
+    });
+    const pluginWorkerManager = {};
+    const app = createApp({
+      type: "agent",
+      agentId: "agent-1",
+      companyId: "company-1",
+      source: "agent_key",
+      runId: "run-1",
+    }, { pluginWorkerManager });
+
+    const res = await request(app)
+      .post("/api/companies/company-1/environments/probe-config")
+      .send({
+        name: "Draft Secure Sandbox",
+        driver: "sandbox",
+        config: {
+          provider: "secure-plugin",
+          template: "base",
+          apiKey: "11111111-1111-1111-1111-111111111111",
+          timeoutMs: 300000,
+          reuseLease: true,
+        },
+      });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toContain("unbound secret refs");
+    expect(mockSecretService.resolveSecretValue).not.toHaveBeenCalled();
+    expect(mockProbeEnvironment).not.toHaveBeenCalled();
+  });
 });
