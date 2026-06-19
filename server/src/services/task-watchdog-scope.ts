@@ -3,7 +3,7 @@ import type { Db } from "@paperclipai/db";
 import { heartbeatRuns, issues, issueWatchdogs } from "@paperclipai/db";
 
 const MAX_WATCHDOG_SCOPE_ANCESTRY_DEPTH = 100;
-const TASK_WATCHDOG_ORIGIN_KIND = "task_watchdog";
+export const TASK_WATCHDOG_ORIGIN_KIND = "task_watchdog";
 
 type AgentRunActor = {
   type: string;

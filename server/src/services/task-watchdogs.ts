@@ -21,9 +21,10 @@ import { parseObject } from "../adapters/utils.js";
 import { logActivity } from "./activity-log.js";
 import { evaluateAgentInvokabilityFromDb } from "./agent-invokability.js";
 import { issueService } from "./issues.js";
+import { TASK_WATCHDOG_ORIGIN_KIND } from "./task-watchdog-scope.js";
 
-const TASK_WATCHDOG_ORIGIN_KIND = "task_watchdog";
 const TASK_WATCHDOG_STOP_FINGERPRINT_PREFIX = "task_watchdog_stop:";
+const TASK_WATCHDOG_SUBTREE_MAX_DEPTH = 100;
 const TASK_WATCHDOG_LIVE_RUN_STATUSES = ["queued", "running", "scheduled_retry"] as const;
 const TASK_WATCHDOG_WAKE_REQUEST_STATUSES = ["queued", "deferred_issue_execution"] as const;
 const TASK_WATCHDOG_TERMINAL_ISSUE_STATUSES = ["done", "cancelled"] as const;
@@ -679,6 +680,65 @@ export async function upsertIssueWatchdogForIssue(
 export function taskWatchdogService(db: Db, deps: TaskWatchdogServiceDeps = {}) {
   const issuesSvc = issueService(db);
 
+  async function loadWatchdogSubtreeIssues(companyId: string, watchedIssueId: string) {
+    const rows = await db.execute(sql`
+      WITH RECURSIVE watched_issues AS (
+        SELECT
+          id,
+          company_id,
+          identifier,
+          title,
+          status,
+          parent_id,
+          assignee_agent_id,
+          assignee_user_id,
+          origin_kind,
+          updated_at,
+          created_at,
+          0 AS depth
+        FROM issues
+        WHERE company_id = ${companyId}
+          AND id = ${watchedIssueId}
+          AND hidden_at IS NULL
+        UNION ALL
+        SELECT
+          child.id,
+          child.company_id,
+          child.identifier,
+          child.title,
+          child.status,
+          child.parent_id,
+          child.assignee_agent_id,
+          child.assignee_user_id,
+          child.origin_kind,
+          child.updated_at,
+          child.created_at,
+          watched_issues.depth + 1
+        FROM issues child
+        JOIN watched_issues ON child.parent_id = watched_issues.id
+        WHERE child.company_id = ${companyId}
+          AND child.hidden_at IS NULL
+          AND child.origin_kind <> ${TASK_WATCHDOG_ORIGIN_KIND}
+          AND watched_issues.depth < ${TASK_WATCHDOG_SUBTREE_MAX_DEPTH - 1}
+      )
+      SELECT
+        id,
+        company_id AS "companyId",
+        identifier,
+        title,
+        status,
+        parent_id AS "parentId",
+        assignee_agent_id AS "assigneeAgentId",
+        assignee_user_id AS "assigneeUserId",
+        origin_kind AS "originKind",
+        updated_at AS "updatedAt",
+        created_at AS "createdAt"
+      FROM watched_issues
+    `);
+
+    return (Array.isArray(rows) ? rows : []) as TaskWatchdogClassifierIssue[];
+  }
+
   async function collectClassifierInput(companyId: string, watchdog: IssueWatchdogRow) {
     const [
       issueRows,
@@ -692,22 +752,7 @@ export function taskWatchdogService(db: Db, deps: TaskWatchdogServiceDeps = {}) 
       documentActivityRows,
       workProductActivityRows,
     ] = await Promise.all([
-      db
-        .select({
-          id: issues.id,
-          companyId: issues.companyId,
-          identifier: issues.identifier,
-          title: issues.title,
-          status: issues.status,
-          parentId: issues.parentId,
-          assigneeAgentId: issues.assigneeAgentId,
-          assigneeUserId: issues.assigneeUserId,
-          originKind: issues.originKind,
-          updatedAt: issues.updatedAt,
-          createdAt: issues.createdAt,
-        })
-        .from(issues)
-        .where(and(eq(issues.companyId, companyId), isNull(issues.hiddenAt))),
+      loadWatchdogSubtreeIssues(companyId, watchdog.issueId),
       db
         .select({
           companyId: heartbeatRuns.companyId,

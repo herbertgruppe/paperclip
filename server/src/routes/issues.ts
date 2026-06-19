@@ -94,6 +94,7 @@ import {
   workProductService,
 } from "../services/index.js";
 import {
+  TASK_WATCHDOG_ORIGIN_KIND,
   resolveTaskWatchdogMutationScope,
   taskWatchdogScopeAllowsIssueMutation,
 } from "../services/task-watchdog-scope.js";
@@ -1058,7 +1059,6 @@ export function issueRoutes(
       ? heartbeat.wakeup
       : opts.taskWatchdogEnqueueWakeup ?? undefined,
   });
-  const TASK_WATCHDOG_ORIGIN_KIND = "task_watchdog";
   const TASK_WATCHDOG_PRODUCT_BUG_ORIGIN_KIND = "task_watchdog_product_bug";
   const routinesSvc = routineService(db, {
     pluginWorkerManager: opts.pluginWorkerManager,

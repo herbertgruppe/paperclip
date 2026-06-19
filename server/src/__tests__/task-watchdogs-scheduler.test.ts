@@ -270,6 +270,37 @@ describeEmbeddedPostgres("task watchdog scheduler", () => {
     expect(watchdogIssues).toHaveLength(0);
   });
 
+  it("does not keep the source live for runs under a nested task-watchdog issue", async () => {
+    const companyId = await seedCompany();
+    const sourceId = await seedIssue(companyId, { identifier: "WDOG-NEST", status: "done" });
+    const agentId = await seedAgent(companyId);
+    const nestedWatchdogIssueId = await seedIssue(companyId, {
+      parentId: sourceId,
+      status: "in_progress",
+      originKind: "task_watchdog",
+      originId: sourceId,
+      originFingerprint: `task_watchdog:${companyId}:${sourceId}`,
+    });
+    const nestedChildId = await seedIssue(companyId, {
+      parentId: nestedWatchdogIssueId,
+      status: "in_progress",
+    });
+    await seedWatchdog(companyId, sourceId, agentId);
+    await db.insert(heartbeatRuns).values({
+      companyId,
+      agentId,
+      status: "running",
+      invocationSource: "assignment",
+      contextSnapshot: { issueId: nestedChildId },
+    });
+    const { service, wakes } = createService();
+
+    const result = await service.reconcileTaskWatchdogs({ companyId });
+
+    expect(result).toMatchObject({ checked: 1, triggered: 1, live: 0 });
+    expect(wakes).toHaveLength(1);
+  });
+
   it("marks a completed watchdog fingerprint reviewed, then reuses the same issue for a later stopped state", async () => {
     const companyId = await seedCompany();
     const sourceId = await seedIssue(companyId, { identifier: "WDOG-3", status: "done" });
