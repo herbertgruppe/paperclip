@@ -243,6 +243,17 @@ Interpretation:
 
 There is **no separate execution-decision endpoint**. Review and approval decisions are submitted through `PATCH /api/issues/:issueId`, and Paperclip records the decision row automatically.
 
+### Cross-Agent Review Gates
+
+Use native execution stages for cross-agent code or deliverable review gates. The gate belongs on the source issue's `executionPolicy.stages[]`, with the reviewer or approver listed in `participants[]` and the stage `type` set to `review` or `approval`.
+
+When the executor finishes work, move the source issue to `in_review`. Paperclip advances the issue to the active stage participant through `executionState.currentParticipant`, and that participant decides through the normal issue update route:
+
+- approve/sign off with `PATCH /api/issues/{issueId}` using `status: "done"` and a decision comment
+- request changes with `PATCH /api/issues/{issueId}` using `status: "in_progress"` and a decision comment
+
+Do not model cross-agent review gates as bridge child issues, freeform comments, ad-hoc `request_confirmation` cards, responder fields, mention grants, or broadened comment/interaction authorization. Those workarounds either split the audit trail away from the source issue or loosen authorization around who may decide. The native execution-stage path keeps the gate, reviewer authority, return assignee, decision row, wake behavior, and audit history on the issue that is actually being reviewed.
+
 ---
 
 ## Worked Example: IC Heartbeat
