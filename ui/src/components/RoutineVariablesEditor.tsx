@@ -30,7 +30,19 @@ import { Textarea } from "@/components/ui/textarea";
 
 const variableTypes: RoutineVariable["type"][] = ["text", "textarea", "number", "boolean", "select"];
 const MANUAL_VARIABLE_SOURCE = "manual";
+const ROUTINE_VARIABLE_MATCHER = /\{\{\s*([A-Za-z](?:\\_|[A-Za-z0-9_])*)\s*\}\}/g;
 type EditableRoutineVariable = RoutineVariable & { source?: typeof MANUAL_VARIABLE_SOURCE };
+
+function normalizeTemplateVariableName(name: string) {
+  return name.replace(/\\_/g, "_");
+}
+
+function stripResolvedTemplateVariables(template: string, resolvedNames: Set<string>) {
+  if (resolvedNames.size === 0) return template;
+  return template.replace(ROUTINE_VARIABLE_MATCHER, (match, rawName: string) =>
+    resolvedNames.has(normalizeTemplateVariableName(rawName)) ? "" : match
+  );
+}
 
 function serializeVariables(value: RoutineVariable[]) {
   return JSON.stringify(value);
@@ -141,6 +153,11 @@ function unmarkVariables(variables: RoutineVariable[]): RoutineVariable[] {
   return variables.map(unmarkVariable);
 }
 
+function stripVariablesByName(variables: RoutineVariable[], names: Set<string>): RoutineVariable[] {
+  if (names.size === 0) return variables;
+  return variables.filter((variable) => !names.has(variable.name));
+}
+
 function editableVariables(variables: RoutineVariable[], manualVariableNames: Set<string>): RoutineVariable[] {
   return markManualVariables(variables, manualVariableNames);
 }
@@ -165,6 +182,7 @@ export function RoutineVariablesEditor({
   descriptionText = 'Detected from `{{name}}` placeholders in the routine title and instructions.',
   emptyMessage = null,
   addButtonLabel = "Add variable",
+  resolvedTemplateVariableNames = [],
 }: {
   title: string;
   description: string;
@@ -177,11 +195,25 @@ export function RoutineVariablesEditor({
   descriptionText?: string;
   emptyMessage?: string | null;
   addButtonLabel?: string;
+  resolvedTemplateVariableNames?: string[];
 }) {
   const [open, setOpen] = useState(true);
+  const resolvedTemplateVariableSignature = resolvedTemplateVariableNames.join("\n");
+  const resolvedTemplateVariableNameSet = useMemo(
+    () => new Set(resolvedTemplateVariableNames),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [resolvedTemplateVariableSignature],
+  );
+  const templateInputsForPrompts = useMemo(
+    () => [
+      stripResolvedTemplateVariables(title, resolvedTemplateVariableNameSet),
+      stripResolvedTemplateVariables(description, resolvedTemplateVariableNameSet),
+    ],
+    [description, resolvedTemplateVariableNameSet, title],
+  );
   const templateNames = useMemo(
-    () => new Set(extractRoutineVariableNames([title, description]).filter((name) => !isBuiltinRoutineVariable(name))),
-    [description, title],
+    () => new Set(extractRoutineVariableNames(templateInputsForPrompts).filter((name) => !isBuiltinRoutineVariable(name))),
+    [templateInputsForPrompts],
   );
   const [manualVariableNames, setManualVariableNames] = useState<Set<string>>(() =>
     preserveUnmatchedVariables ? new Set(manualVariableNamesSeed ?? manualVariableNameSet(value, templateNames)) : new Set(),
@@ -192,28 +224,31 @@ export function RoutineVariablesEditor({
     setManualVariableNames(new Set(manualVariableNamesSeed));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [manualVariableNamesSeedSignature, preserveUnmatchedVariables]);
+  const cleanValue = useMemo(
+    () => stripVariablesByName(unmarkVariables(value), resolvedTemplateVariableNameSet),
+    [resolvedTemplateVariableNameSet, value],
+  );
   const syncedVariables = useMemo(
     () => {
-      const cleanValue = unmarkVariables(value);
       if (!preserveUnmatchedVariables) {
-        return syncRoutineVariablesWithTemplate([title, description], cleanValue);
+        return syncRoutineVariablesWithTemplate(templateInputsForPrompts, cleanValue);
       }
       return editableVariables(
-        syncVariables([title, description], cleanValue, manualVariableNames),
+        syncVariables(templateInputsForPrompts, cleanValue, manualVariableNames),
         manualVariableNames,
       );
     },
-    [description, manualVariableNames, preserveUnmatchedVariables, title, value],
+    [cleanValue, manualVariableNames, preserveUnmatchedVariables, templateInputsForPrompts],
   );
-  const syncedSignature = serializeVariables(syncedVariables);
-  const currentSignature = serializeVariables(value);
+  const syncedSignature = serializeVariables(unmarkVariables(syncedVariables));
+  const currentSignature = serializeVariables(cleanValue);
 
   useEffect(() => {
     if (!preserveUnmatchedVariables) return;
     if (value.length === 0 && manualVariableNamesSeed && manualVariableNamesSeed.length > 0) return;
-    const existingNames = variableNameSet(value);
+    const existingNames = variableNameSet(cleanValue);
     setManualVariableNames((current) => pruneManualVariableNameSet(current, existingNames));
-  }, [manualVariableNamesSeed, preserveUnmatchedVariables, value]);
+  }, [cleanValue, manualVariableNamesSeed, preserveUnmatchedVariables]);
 
   useEffect(() => {
     if (syncedSignature !== currentSignature) {

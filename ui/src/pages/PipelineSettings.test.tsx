@@ -16,8 +16,10 @@ import { PipelineSettings } from "./PipelineSettings";
 // MarkdownEditor pulls in heavy Lexical/sandpack deps that crash jsdom at import.
 // Mock it with a controllable textarea so tests can drive the instructions body
 // (and the real RoutineVariablesEditor still syncs against it).
-vi.mock("../components/MarkdownEditor", () => ({
-  MarkdownEditor: ({
+vi.mock("../components/MarkdownEditor", async () => {
+  const React = await import("react");
+  return {
+    MarkdownEditor: React.forwardRef(({
     value,
     onChange,
     placeholder,
@@ -25,15 +27,29 @@ vi.mock("../components/MarkdownEditor", () => ({
     value: string;
     onChange: (value: string) => void;
     placeholder?: string;
-  }) => (
-    <textarea
-      aria-label="Stage instructions"
-      value={value}
-      placeholder={placeholder}
-      onChange={(event) => onChange(event.target.value)}
-    />
-  ),
-}));
+  }, ref) => {
+    const textareaRef = React.useRef<HTMLTextAreaElement>(null);
+    React.useImperativeHandle(ref, () => ({
+      focus: () => textareaRef.current?.focus(),
+      insertMarkdown: (markdown: string) => {
+        const textarea = textareaRef.current;
+        const start = textarea?.selectionStart ?? value.length;
+        const end = textarea?.selectionEnd ?? start;
+        onChange(`${value.slice(0, start)}${markdown}${value.slice(end)}`);
+      },
+    }), [onChange, value]);
+    return (
+      <textarea
+        ref={textareaRef}
+        aria-label="Stage instructions"
+        value={value}
+        placeholder={placeholder}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    );
+  }),
+  };
+});
 
 vi.mock("@/lib/router", () => ({
   Link: ({
@@ -133,11 +149,38 @@ function makeBreakdownPipeline(): PipelineDetail {
           ...stage,
           config: {
             ...stage.config,
+            variables: [
+              {
+                key: "release",
+                label: "Release",
+                type: "text",
+                options: [],
+                required: true,
+                showInAddForm: true,
+              },
+              {
+                key: "owner",
+                label: "Owner",
+                type: "text",
+                options: [],
+                required: false,
+                showInAddForm: true,
+              },
+              {
+                key: "title",
+                label: "Title",
+                type: "text",
+                options: [],
+                required: false,
+                showInAddForm: true,
+              },
+            ],
             breakdown: {
               targetPipelineId: "pipeline-2",
               targetStageKey: "incoming",
               pieceNoun: "task",
-              inheritFields: ["release"],
+              carryOverPolicy: { version: 1, mode: "all_except", includeFields: [], excludeFields: [] },
+              inheritFields: ["release", "owner"],
               advanceTo: "review",
               waitForPieces: false,
               whenFinishedMoveTo: null,
@@ -147,6 +190,42 @@ function makeBreakdownPipeline(): PipelineDetail {
       : stage,
   );
   return pipeline;
+}
+
+function makeChildPipeline(): PipelineDetail {
+  return {
+    ...makePipeline(),
+    id: "pipeline-2",
+    key: "piece_pipeline",
+    name: "Piece pipeline",
+    stages: [
+      {
+        id: "piece-stage-1",
+        pipelineId: "pipeline-2",
+        key: "incoming",
+        name: "Incoming",
+        kind: "working",
+        position: 100,
+        config: {
+          variables: [],
+          automation: {
+            assigneeAgentId: "agent-1",
+            instructionsBody: "Use incoming details.",
+          },
+        },
+      },
+      {
+        id: "piece-stage-2",
+        pipelineId: "pipeline-2",
+        key: "review",
+        name: "Review",
+        kind: "review",
+        position: 200,
+        config: { variables: [] },
+      },
+    ],
+    transitions: [],
+  };
 }
 
 function renderSettings() {
@@ -948,8 +1027,82 @@ describe("PipelineSettings", () => {
     queryClient.clear();
   });
 
-  it("shows the carry-over source pipeline, intake stage, and a link to edit those fields", async () => {
-    vi.mocked(pipelinesApi.get).mockResolvedValue(makeBreakdownPipeline());
+  it("groups carry-over fields by source and ancestor while keeping destination as validation context", async () => {
+    const breakdownPipeline = makeBreakdownPipeline();
+    vi.mocked(pipelinesApi.get).mockResolvedValue(breakdownPipeline);
+    vi.mocked(pipelinesApi.list).mockResolvedValue([
+      makePipeline(),
+      {
+        ...makePipeline(),
+        id: "pipeline-parent",
+        key: "release_pipeline",
+        name: "Release",
+        stages: [
+          {
+            id: "parent-stage-1",
+            pipelineId: "pipeline-parent",
+            key: "planning",
+            name: "Planning",
+            kind: "working",
+            position: 100,
+            config: {
+              variables: [
+                { key: "campaign", label: "Campaign", type: "text", options: [], required: false },
+                { key: "title", label: "Title", type: "text", options: [], required: false },
+              ],
+              breakdown: {
+                targetPipelineId: "pipeline-1",
+                targetStageKey: "intake",
+                pieceNoun: "feature",
+              },
+            },
+          },
+        ],
+      },
+      {
+        ...makePipeline(),
+        id: "pipeline-grandparent",
+        key: "campaign_pipeline",
+        name: "Campaign",
+        stages: [
+          {
+            id: "grandparent-stage-1",
+            pipelineId: "pipeline-grandparent",
+            key: "planning",
+            name: "Planning",
+            kind: "working",
+            position: 100,
+            config: {
+              variables: [{ key: "quarter", label: "Quarter", type: "text", options: [], required: false }],
+              breakdown: {
+                targetPipelineId: "pipeline-parent",
+                targetStageKey: "planning",
+                pieceNoun: "release",
+              },
+            },
+          },
+        ],
+      },
+      {
+        ...makePipeline(),
+        id: "pipeline-2",
+        key: "piece_pipeline",
+        name: "Piece pipeline",
+        stages: [
+          {
+            id: "piece-stage-1",
+            pipelineId: "pipeline-2",
+            key: "incoming",
+            name: "Incoming",
+            kind: "working",
+            position: 100,
+            config: {
+              variables: [{ key: "release", label: "Release", type: "text", options: [], required: true }],
+            },
+          },
+        ],
+      },
+    ]);
 
     const { container, root, queryClient } = renderSettings();
     await flushQueries();
@@ -960,18 +1113,75 @@ describe("PipelineSettings", () => {
     await flushQueries();
 
     const carryOverRow = Array.from(container.querySelectorAll("div")).find(
-      (node) => node.textContent?.includes("Fields come from") && node.textContent?.includes("Edit these fields"),
-    );
+      (node) =>
+        node.textContent?.includes("Values are copied from this item and its ancestors") &&
+        node.textContent.includes("Destination validation:"),
+    ) as HTMLElement | undefined;
     expect(carryOverRow).toBeTruthy();
     expect(carryOverRow!.textContent).toContain("Piece pipeline");
     expect(carryOverRow!.textContent).toContain("Incoming");
+    expect(carryOverRow!.textContent).toContain("This item");
+    expect(carryOverRow!.textContent).toContain("Parent: Release");
+    expect(carryOverRow!.textContent).toContain("Grandparent: Campaign");
+    expect(carryOverRow!.textContent).toContain("Campaign");
+    expect(carryOverRow!.textContent).toContain("Quarter");
 
     const editLink = Array.from(container.querySelectorAll("a")).find((anchor) =>
-      anchor.textContent?.includes("Edit these fields"),
+      anchor.textContent?.includes("Review destination fields"),
     ) as HTMLAnchorElement | undefined;
     expect(editLink?.getAttribute("href")).toBe("/pipelines/pipeline-2/settings?stage=piece-stage-1");
-    // The picker still lists the destination's intake fields by their keys.
-    expect(container.textContent).toContain("Release");
+    const carryOverLabels = Array.from(carryOverRow!.querySelectorAll("label")).map((label) => label.textContent ?? "");
+    expect(carryOverLabels.some((label) => label.includes("Release"))).toBe(true);
+    expect(carryOverLabels.some((label) => label.includes("Owner"))).toBe(true);
+    expect(carryOverLabels.some((label) => label.includes("Title"))).toBe(false);
+    expect(carryOverLabels.some((label) => label.includes("Name"))).toBe(false);
+    const releaseCheckbox = carryOverLabels
+      .map((label, index) => ({ label, node: carryOverRow!.querySelectorAll("label")[index] }))
+      .find((entry) => entry.label.includes("Release"))
+      ?.node.querySelector<HTMLInputElement>('input[type="checkbox"]');
+    expect(releaseCheckbox?.checked).toBe(true);
+
+    flushSync(() => {
+      root.unmount();
+    });
+    queryClient.clear();
+  });
+
+  it("saves carry-over exclusions with an all-except policy", async () => {
+    vi.mocked(pipelinesApi.get).mockResolvedValue(makeBreakdownPipeline());
+
+    const { container, root, queryClient } = renderSettings();
+    await flushQueries();
+
+    flushSync(() => {
+      findButton(container, "Automation")!.click();
+    });
+    await flushQueries();
+
+    const ownerLabel = Array.from(container.querySelectorAll("label")).find((label) =>
+      label.textContent?.includes("Owner"),
+    );
+    const ownerCheckbox = ownerLabel?.querySelector<HTMLInputElement>('input[type="checkbox"]');
+    expect(ownerCheckbox?.checked).toBe(true);
+    flushSync(() => {
+      ownerCheckbox!.click();
+    });
+    await flushQueries();
+
+    flushSync(() => {
+      findButton(container, "Save stage")!.click();
+    });
+    await flushQueries();
+
+    const updateStageCalls = (pipelinesApi.updateStage as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+    const lastConfig = (updateStageCalls.at(-1)?.[2] as { config: { breakdown: Record<string, unknown> } }).config;
+    expect(lastConfig.breakdown.carryOverPolicy).toEqual({
+      version: 1,
+      mode: "all_except",
+      includeFields: [],
+      excludeFields: ["owner"],
+    });
+    expect(lastConfig.breakdown.inheritFields).toEqual(["release"]);
 
     flushSync(() => {
       root.unmount();
@@ -1014,8 +1224,98 @@ describe("PipelineSettings", () => {
     await flushQueries();
 
     expect(container.textContent).toContain(
-      "This pipeline is archived, so its intake fields can't be edited until it's restored.",
+      "This destination pipeline is archived, so its validation fields can't be edited until it's restored.",
     );
+
+    flushSync(() => {
+      root.unmount();
+    });
+    queryClient.clear();
+  });
+
+  it("inserts carried field tokens and suppresses duplicate placeholder prompts", async () => {
+    const childPipeline = makeChildPipeline();
+    vi.mocked(pipelinesApi.get).mockResolvedValue(childPipeline);
+    vi.mocked(pipelinesApi.list).mockResolvedValue([makeBreakdownPipeline(), childPipeline]);
+
+    const { container, root, queryClient } = renderSettings();
+    await flushQueries();
+
+    flushSync(() => {
+      findButton(container, "Automation")!.click();
+    });
+    await flushQueries();
+
+    expect(container.textContent).toContain("Already available on child items");
+    expect(findButton(container, "{{release}}")).toBeTruthy();
+    expect(findButton(container, "{{owner}}")).toBeTruthy();
+    expect(findButton(container, "{{title}}")).toBeUndefined();
+
+    const editor = container.querySelector<HTMLTextAreaElement>('[aria-label="Stage instructions"]')!;
+    flushSync(() => {
+      editor.focus();
+      editor.setSelectionRange(0, 0);
+      findButton(container, "{{release}}")!.click();
+    });
+    await flushQueries();
+
+    expect(editor.value).toBe("{{release}}Use incoming details.");
+    expect(container.textContent).not.toContain("Prompted when this placeholder appears in the instructions.");
+
+    flushSync(() => {
+      findButton(container, "Save stage")!.click();
+    });
+    await flushQueries();
+
+    const updateStageCalls = (pipelinesApi.updateStage as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+    const lastConfig = (updateStageCalls.at(-1)?.[2] as {
+      config: {
+        automation: { instructionsBody: string };
+        variables: Array<{ name: string }>;
+      };
+    }).config;
+    expect(lastConfig.automation.instructionsBody).toBe("{{release}}Use incoming details.");
+    expect(lastConfig.variables.map((variable) => variable.name)).not.toContain("release");
+
+    flushSync(() => {
+      root.unmount();
+    });
+    queryClient.clear();
+  });
+
+  it("does not mark legacy carried intake fields dirty on load", async () => {
+    const childPipeline = makeChildPipeline();
+    childPipeline.stages[0]!.config = {
+      ...childPipeline.stages[0]!.config,
+      variables: [
+        {
+          key: "release",
+          label: "Release",
+          type: "text",
+          options: [],
+          required: false,
+          showInAddForm: true,
+        },
+      ],
+      automation: {
+        assigneeAgentId: "agent-1",
+        instructionsBody: "{{release}}Use incoming details.",
+      },
+    };
+    vi.mocked(pipelinesApi.get).mockResolvedValue(childPipeline);
+    vi.mocked(pipelinesApi.list).mockResolvedValue([makeBreakdownPipeline(), childPipeline]);
+
+    const { container, root, queryClient } = renderSettings();
+    await flushQueries();
+
+    flushSync(() => {
+      findButton(container, "Automation")!.click();
+    });
+    await flushQueries();
+
+    expect(container.textContent).toContain("Already available on child items");
+    expect(container.textContent).not.toContain("Prompted when this placeholder appears in the instructions.");
+    expect(findButton(container, "Save stage")).toBeUndefined();
 
     flushSync(() => {
       root.unmount();

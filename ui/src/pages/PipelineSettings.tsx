@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   extractRoutineVariableNames,
@@ -38,12 +38,18 @@ import { agentsApi } from "../api/agents";
 import { accessApi } from "../api/access";
 import { secretsApi } from "../api/secrets";
 import { ApiError } from "../api/client";
-import type { PipelineCompanyCaseEvent, PipelineDetail, PipelineStage, PipelineTransitionEdge } from "../api/pipelines";
+import type {
+  PipelineCompanyCaseEvent,
+  PipelineDetail,
+  PipelineListItem,
+  PipelineStage,
+  PipelineTransitionEdge,
+} from "../api/pipelines";
 import { pipelinesApi } from "../api/pipelines";
 import { EmptyState } from "../components/EmptyState";
 import { StageSecretsPanel } from "../components/StageSecretsPanel";
 import { PageSkeleton } from "../components/PageSkeleton";
-import { MarkdownEditor } from "../components/MarkdownEditor";
+import { MarkdownEditor, type MarkdownEditorRef } from "../components/MarkdownEditor";
 import { RoutineVariablesEditor, RoutineVariablesHint } from "../components/RoutineVariablesEditor";
 import { PipelineStageHistoryPanel } from "../components/PipelineStageHistoryPanel";
 import { AgentIcon } from "../components/AgentIconPicker";
@@ -80,8 +86,11 @@ import { Link, useNavigate, useParams, useSearchParams } from "@/lib/router";
 import { StageHealthWarnings } from "../components/PipelineHealthWarnings";
 import {
   breakdownSummarySentence,
+  isCarryOverFieldEnabled,
+  isCarryOverIdentityFieldKey,
   pieceNounPlural,
   readStageBreakdown,
+  type BreakdownCarryOverPolicy,
   type BreakdownCopyNames,
 } from "../lib/pipeline-breakdown";
 
@@ -306,6 +315,12 @@ function stripVariableEditorMetadata(variables: RoutineVariable[]): RoutineVaria
   });
 }
 
+function stripVariablesByName(variables: RoutineVariable[], names: Iterable<string>): RoutineVariable[] {
+  const nameSet = new Set(names);
+  if (nameSet.size === 0) return variables;
+  return variables.filter((variable) => !nameSet.has(variable.name));
+}
+
 function manualVariableNamesForTemplate(
   variables: RoutineVariable[],
   template: Array<string | null | undefined>,
@@ -314,6 +329,234 @@ function manualVariableNamesForTemplate(
     extractRoutineVariableNames(template).filter((name) => !isBuiltinRoutineVariable(name)),
   );
   return variables.filter((variable) => !templateNames.has(variable.name)).map((variable) => variable.name);
+}
+
+const DEFAULT_CARRY_OVER_POLICY: BreakdownCarryOverPolicy = {
+  version: 1,
+  mode: "all_except",
+  includeFields: [],
+  excludeFields: [],
+};
+
+type PipelineWithOptionalConnections = (PipelineDetail | PipelineListItem) & {
+  connections?: PipelineListItem["connections"];
+};
+
+type CarryOverFieldOption = {
+  key: string;
+  label: string;
+  required: boolean;
+  originId: string;
+  originLabel: string;
+  originDescription: string | null;
+};
+
+type CarryOverFieldGroup = {
+  id: string;
+  label: string;
+  description: string | null;
+  depth: number;
+  fields: CarryOverFieldOption[];
+};
+
+function copyCarryOverPolicy(policy: BreakdownCarryOverPolicy | null | undefined): BreakdownCarryOverPolicy {
+  return {
+    version: 1,
+    mode: policy?.mode === "only" ? "only" : "all_except",
+    includeFields: [...(policy?.includeFields ?? [])],
+    excludeFields: [...(policy?.excludeFields ?? [])],
+  };
+}
+
+function readVariableField(variable: unknown): { key: string; label: string; required: boolean } | null {
+  if (!variable || typeof variable !== "object" || Array.isArray(variable)) return null;
+  const record = variable as Record<string, unknown>;
+  const key = typeof record.name === "string" && record.name.trim()
+    ? record.name.trim()
+    : typeof record.key === "string" && record.key.trim()
+      ? record.key.trim()
+      : "";
+  if (!key) return null;
+  const label = typeof record.label === "string" && record.label.trim() ? record.label.trim() : key;
+  if (isCarryOverIdentityFieldKey(key) || isCarryOverIdentityFieldKey(label)) return null;
+  return { key, label, required: record.required === true };
+}
+
+function fieldOriginLabel(depth: number, pipelineName: string) {
+  if (depth === 0) return "This item";
+  if (depth === 1) return `Parent: ${pipelineName}`;
+  if (depth === 2) return `Grandparent: ${pipelineName}`;
+  return `Ancestor ${depth}: ${pipelineName}`;
+}
+
+function pipelineCarryOverFields(source: { pipeline: PipelineWithOptionalConnections; depth: number }): CarryOverFieldOption[] {
+  const stages = [...(source.pipeline.stages ?? [])].sort((left, right) => left.position - right.position);
+  const seen = new Set<string>();
+  return stages.flatMap((stage) => {
+    const variables = stageConfig(stage).variables ?? [];
+    return variables.flatMap((variable) => {
+      const field = readVariableField(variable);
+      if (!field || seen.has(field.key)) return [];
+      seen.add(field.key);
+      return [{
+        ...field,
+        originId: source.pipeline.id,
+        originLabel: fieldOriginLabel(source.depth, source.pipeline.name),
+        originDescription: source.depth === 0 ? source.pipeline.name : null,
+      }];
+    });
+  });
+}
+
+function pipelineBreakdownTargetIds(pipeline: PipelineWithOptionalConnections) {
+  const ids: string[] = [];
+  for (const stage of pipeline.stages ?? []) {
+    const targetPipelineId = readStageBreakdown(stage)?.targetPipelineId;
+    if (targetPipelineId) ids.push(targetPipelineId);
+  }
+  return ids;
+}
+
+function upstreamPipelineIds(
+  pipeline: PipelineWithOptionalConnections,
+  candidates: PipelineWithOptionalConnections[],
+) {
+  const ids = new Set<string>();
+  for (const candidate of candidates) {
+    if (candidate.id === pipeline.id) continue;
+    if (pipelineBreakdownTargetIds(candidate).includes(pipeline.id)) ids.add(candidate.id);
+  }
+  for (const id of pipeline.connections?.upstreamPipelineIds ?? []) ids.add(id);
+  return [...ids];
+}
+
+function buildCarryOverFieldGroups(
+  pipeline: PipelineWithOptionalConnections | null,
+  candidates: PipelineWithOptionalConnections[],
+): CarryOverFieldGroup[] {
+  if (!pipeline) return [];
+  const byId = new Map<string, PipelineWithOptionalConnections>();
+  for (const candidate of candidates) byId.set(candidate.id, candidate);
+  const listedCurrentPipeline = byId.get(pipeline.id);
+  byId.set(pipeline.id, listedCurrentPipeline ? { ...listedCurrentPipeline, ...pipeline } : pipeline);
+
+  const sources: Array<{ pipeline: PipelineWithOptionalConnections; depth: number }> = [];
+  const queue: Array<{ pipeline: PipelineWithOptionalConnections; depth: number }> = [{ pipeline: byId.get(pipeline.id)!, depth: 0 }];
+  const visited = new Set<string>();
+  while (queue.length > 0) {
+    const next = queue.shift()!;
+    if (visited.has(next.pipeline.id) || next.depth > 8) continue;
+    visited.add(next.pipeline.id);
+    sources.push(next);
+    for (const upstreamId of upstreamPipelineIds(next.pipeline, [...byId.values()]).sort()) {
+      const upstream = byId.get(upstreamId);
+      if (upstream && !visited.has(upstream.id)) queue.push({ pipeline: upstream, depth: next.depth + 1 });
+    }
+  }
+
+  const claimedFieldKeys = new Set<string>();
+  return sources.flatMap((source) => {
+    const fields = pipelineCarryOverFields(source).filter((field) => {
+      if (claimedFieldKeys.has(field.key)) return false;
+      claimedFieldKeys.add(field.key);
+      return true;
+    });
+    if (fields.length === 0) return [];
+    return [{
+      id: source.pipeline.id,
+      label: fieldOriginLabel(source.depth, source.pipeline.name),
+      description: source.depth === 0 ? source.pipeline.name : null,
+      depth: source.depth,
+      fields,
+    }];
+  });
+}
+
+function flattenCarryOverFields(groups: CarryOverFieldGroup[]) {
+  return groups.flatMap((group) => group.fields);
+}
+
+function selectedCarryOverFieldKeys(policy: BreakdownCarryOverPolicy, fields: CarryOverFieldOption[]) {
+  return fields.filter((field) => isCarryOverFieldEnabled(policy, field.key)).map((field) => field.key);
+}
+
+function carryOverPolicyForCheckedFields(checkedKeys: Iterable<string>, fields: CarryOverFieldOption[]): BreakdownCarryOverPolicy {
+  const checked = new Set(checkedKeys);
+  return {
+    version: 1,
+    mode: "all_except",
+    includeFields: [],
+    excludeFields: fields.filter((field) => !checked.has(field.key)).map((field) => field.key),
+  };
+}
+
+function toggleCarryOverField(
+  policy: BreakdownCarryOverPolicy,
+  fields: CarryOverFieldOption[],
+  fieldKey: string,
+  checked: boolean,
+): BreakdownCarryOverPolicy {
+  const selected = new Set(selectedCarryOverFieldKeys(policy, fields));
+  if (checked) selected.add(fieldKey);
+  else selected.delete(fieldKey);
+  return carryOverPolicyForCheckedFields(selected, fields);
+}
+
+function buildIncomingCarryOverFieldGroups(
+  pipeline: PipelineDetail | null,
+  stage: PipelineStage | null,
+  candidates: PipelineListItem[],
+): CarryOverFieldGroup[] {
+  if (!pipeline || !stage) return [];
+  const byId = new Map<string, PipelineWithOptionalConnections>();
+  for (const candidate of candidates) byId.set(candidate.id, candidate);
+  const listedCurrentPipeline = byId.get(pipeline.id);
+  byId.set(pipeline.id, listedCurrentPipeline ? { ...listedCurrentPipeline, ...pipeline } : pipeline);
+
+  return [...byId.values()].flatMap((sourcePipeline) => {
+    return (sourcePipeline.stages ?? []).flatMap((sourceStage) => {
+      const breakdown = readStageBreakdown(sourceStage);
+      if (!breakdown || breakdown.targetPipelineId !== pipeline.id || breakdown.targetStageKey !== stage.key) {
+        return [];
+      }
+      const sourceFieldGroups = buildCarryOverFieldGroups(sourcePipeline, [...byId.values()]);
+      const sourceFields = flattenCarryOverFields(sourceFieldGroups);
+      const fieldByKey = new Map(sourceFields.map((field) => [field.key, field]));
+      const policy = copyCarryOverPolicy(breakdown.carryOverPolicy ?? DEFAULT_CARRY_OVER_POLICY);
+      const selectedKeys = policy.mode === "only"
+        ? policy.includeFields.filter((key) => !isCarryOverIdentityFieldKey(key))
+        : selectedCarryOverFieldKeys(policy, sourceFields);
+      const fields = selectedKeys.map((key) => {
+        const field = fieldByKey.get(key);
+        return field ?? {
+          key,
+          label: key,
+          required: false,
+          originId: sourcePipeline.id,
+          originLabel: sourcePipeline.name,
+          originDescription: sourceStage.name,
+        };
+      });
+      if (fields.length === 0) return [];
+      return [{
+        id: `${sourcePipeline.id}:${sourceStage.id}`,
+        label: sourcePipeline.name,
+        description: sourceStage.name,
+        depth: 1,
+        fields,
+      }];
+    });
+  });
+}
+
+function carryOverPolicyForSave(policy: BreakdownCarryOverPolicy, fields: CarryOverFieldOption[]) {
+  if (fields.length === 0) return copyCarryOverPolicy(policy);
+  return carryOverPolicyForCheckedFields(selectedCarryOverFieldKeys(policy, fields), fields);
+}
+
+function inheritFieldsForSave(policy: BreakdownCarryOverPolicy, fields: CarryOverFieldOption[]) {
+  if (fields.length === 0) return policy.mode === "only" ? [...policy.includeFields] : [];
+  return selectedCarryOverFieldKeys(policy, fields);
 }
 
 type StageFormValues = {
@@ -334,7 +577,7 @@ type StageFormValues = {
   breakdownTargetPipelineId: string;
   breakdownTargetStageKey: string;
   breakdownPieceNoun: string;
-  breakdownInheritFields: string[];
+  breakdownCarryOverPolicy: BreakdownCarryOverPolicy;
   breakdownAdvanceTo: string;
   breakdownWaitForPieces: boolean;
   breakdownWhenFinishedMoveTo: string;
@@ -369,7 +612,7 @@ function computeStageForm(
     breakdownTargetPipelineId: breakdown?.targetPipelineId ?? "",
     breakdownTargetStageKey: breakdown?.targetStageKey ?? "",
     breakdownPieceNoun: breakdown?.pieceNoun ?? "piece",
-    breakdownInheritFields: breakdown?.inheritFields ?? [],
+    breakdownCarryOverPolicy: copyCarryOverPolicy(breakdown?.carryOverPolicy ?? DEFAULT_CARRY_OVER_POLICY),
     breakdownAdvanceTo: breakdown?.advanceTo ?? "",
     breakdownWaitForPieces: breakdown?.waitForPieces ?? false,
     breakdownWhenFinishedMoveTo: breakdown?.whenFinishedMoveTo ?? "",
@@ -482,6 +725,49 @@ function FieldRow({
     <div className="grid gap-2 py-3 text-sm sm:grid-cols-[10rem_minmax(0,1fr)] sm:items-center">
       <div className="font-medium text-muted-foreground">{label}</div>
       <div className="min-w-0">{children}</div>
+    </div>
+  );
+}
+
+function CarriedFieldTokenHelper({
+  groups,
+  onInsert,
+}: {
+  groups: CarryOverFieldGroup[];
+  onInsert: (fieldKey: string) => void;
+}) {
+  if (groups.length === 0) return null;
+  return (
+    <div className="rounded-md border border-dashed border-border bg-muted/25 px-3 py-2">
+      <div className="mb-2 flex flex-wrap items-center gap-2">
+        <span className="text-xs font-semibold uppercase text-muted-foreground">
+          Already available on child items
+        </span>
+      </div>
+      <div className="space-y-2">
+        {groups.map((group) => (
+          <div key={group.id} className="space-y-1">
+            <p className="text-xs text-muted-foreground">
+              <span className="font-medium text-foreground">{group.label}</span>
+              {group.description ? <span> · {group.description}</span> : null}
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              {group.fields.map((field) => (
+                <button
+                  key={`${group.id}:${field.key}`}
+                  type="button"
+                  onClick={() => onInsert(field.key)}
+                  className="inline-flex h-7 items-center rounded-md border border-border bg-background px-2 font-mono text-xs text-foreground transition-colors hover:bg-accent"
+                  title={`Insert {{${field.key}}}`}
+                  aria-label={`Insert {{${field.key}}}`}
+                >
+                  {`{{${field.key}}}`}
+                </button>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -610,6 +896,7 @@ export function PipelineSettings() {
   const [selectedApproval, setSelectedApproval] = useState("any_human");
   const [instructionsBody, setInstructionsBody] = useState("");
   const [instructionsVariables, setInstructionsVariables] = useState<RoutineVariable[]>([]);
+  const instructionsEditorRef = useRef<MarkdownEditorRef>(null);
   // Stage secrets (the automation routine's env). Edited independently of the
   // rest of the stage form and saved through the narrow automation-env route.
   const [stageEnv, setStageEnv] = useState<RoutineEnvConfig>({});
@@ -623,7 +910,9 @@ export function PipelineSettings() {
   const [breakdownTargetPipelineId, setBreakdownTargetPipelineId] = useState("");
   const [breakdownTargetStageKey, setBreakdownTargetStageKey] = useState("");
   const [breakdownPieceNoun, setBreakdownPieceNoun] = useState("piece");
-  const [breakdownInheritFields, setBreakdownInheritFields] = useState<string[]>([]);
+  const [breakdownCarryOverPolicy, setBreakdownCarryOverPolicy] = useState<BreakdownCarryOverPolicy>(
+    DEFAULT_CARRY_OVER_POLICY,
+  );
   const [breakdownAdvanceTo, setBreakdownAdvanceTo] = useState("");
   const [breakdownWaitForPieces, setBreakdownWaitForPieces] = useState(false);
   const [breakdownWhenFinishedMoveTo, setBreakdownWhenFinishedMoveTo] = useState("");
@@ -701,6 +990,22 @@ export function PipelineSettings() {
   const pipeline = pipelineQuery.data ?? null;
   const stages = useMemo(() => sortedStages(pipeline), [pipeline]);
   const selectedStage = stages.find((stage) => stage.id === selectedStageId) ?? stages[0] ?? null;
+  const incomingCarryOverFieldGroups = useMemo(
+    () => buildIncomingCarryOverFieldGroups(pipeline, selectedStage, pipelinesListQuery.data ?? []),
+    [pipeline, pipelinesListQuery.data, selectedStage],
+  );
+  const incomingCarryOverFieldKeys = useMemo(
+    () => [...new Set(flattenCarryOverFields(incomingCarryOverFieldGroups).map((field) => field.key))],
+    [incomingCarryOverFieldGroups],
+  );
+  const insertIncomingCarryOverToken = useCallback((fieldKey: string) => {
+    const token = `{{${fieldKey}}}`;
+    if (instructionsEditorRef.current) {
+      instructionsEditorRef.current.insertMarkdown(token);
+      return;
+    }
+    setInstructionsBody((current) => `${current}${current ? " " : ""}${token}`);
+  }, []);
 
   const instructionsKey = selectedStage ? stageInstructionsKey(selectedStage.id) : null;
   const instructionsQuery = useQuery({
@@ -844,7 +1149,7 @@ export function PipelineSettings() {
     setBreakdownTargetPipelineId(form.breakdownTargetPipelineId);
     setBreakdownTargetStageKey(form.breakdownTargetStageKey);
     setBreakdownPieceNoun(form.breakdownPieceNoun);
-    setBreakdownInheritFields(form.breakdownInheritFields);
+    setBreakdownCarryOverPolicy(form.breakdownCarryOverPolicy);
     setBreakdownAdvanceTo(form.breakdownAdvanceTo);
     setBreakdownWaitForPieces(form.breakdownWaitForPieces);
     setBreakdownWhenFinishedMoveTo(form.breakdownWhenFinishedMoveTo);
@@ -903,7 +1208,7 @@ export function PipelineSettings() {
       const nextRequiresApproval = stageKind === "review";
       const config: StageConfig = {
         ...stageConfig(selectedStage),
-        variables: instructionsVariables,
+        variables: stripVariablesByName(instructionsVariables, incomingCarryOverFieldKeys),
         disabled: newEntriesDisabled,
         disabledReason: newEntriesDisabled ? disableReason.trim() || null : null,
         automation: {
@@ -930,7 +1235,8 @@ export function PipelineSettings() {
           targetPipelineId: breakdownTargetPipelineId,
           targetStageKey: breakdownTargetStageKey,
           pieceNoun: breakdownPieceNoun.trim() || "piece",
-          inheritFields: breakdownInheritFields,
+          carryOverPolicy: carryOverPolicyForSave(breakdownCarryOverPolicy, breakdownCarryOverFieldOptions),
+          inheritFields: inheritFieldsForSave(breakdownCarryOverPolicy, breakdownCarryOverFieldOptions),
           waitForPieces: breakdownWaitForPieces,
           ...(breakdownAdvanceTo ? { advanceTo: breakdownAdvanceTo } : {}),
           ...(breakdownWaitForPieces && breakdownWhenFinishedMoveTo
@@ -1241,7 +1547,7 @@ export function PipelineSettings() {
         breakdownTargetPipelineId,
         breakdownTargetStageKey,
         breakdownPieceNoun,
-        breakdownInheritFields,
+        breakdownCarryOverPolicy,
         breakdownAdvanceTo,
         breakdownWaitForPieces,
         breakdownWhenFinishedMoveTo,
@@ -1254,7 +1560,8 @@ export function PipelineSettings() {
   const instructionsBodyDirty = selectedStage != null && instructionsBody !== savedInstructionsBody;
   const variablesDirty =
     selectedStage != null &&
-    JSON.stringify(stripVariableEditorMetadata(instructionsVariables)) !== JSON.stringify(savedInstructionsVariables);
+    JSON.stringify(stripVariablesByName(stripVariableEditorMetadata(instructionsVariables), incomingCarryOverFieldKeys)) !==
+      JSON.stringify(stripVariablesByName(savedInstructionsVariables, incomingCarryOverFieldKeys));
   const selectedAutomationAgent = stageAssigneeAgentId ? agentById.get(stageAssigneeAgentId) ?? null : null;
   const stageEnvDirty = selectedStage != null && JSON.stringify(stageEnv) !== savedStageEnvKey;
   const stageDirty =
@@ -1275,9 +1582,14 @@ export function PipelineSettings() {
     (left, right) => left.position - right.position,
   );
   const breakdownEntryStage = breakdownTargetStages.find((stage) => stage.key === breakdownTargetStageKey) ?? null;
-  const breakdownInheritFieldOptions = breakdownTargetIntakeQuery.data?.fields ?? [];
-  // Carry-over fields come from the destination pipeline's intake stage. Surface
-  // that source (and a link to edit it there) so this picker isn't a dead end.
+  const breakdownCarryOverFieldGroups = buildCarryOverFieldGroups(pipeline, pipelinesListQuery.data ?? []);
+  const breakdownCarryOverFieldOptions = flattenCarryOverFields(breakdownCarryOverFieldGroups);
+  const breakdownSelectedCarryOverFields = breakdownCarryOverFieldOptions.filter((field) =>
+    isCarryOverFieldEnabled(breakdownCarryOverPolicy, field.key),
+  );
+  const breakdownTargetFieldByKey = new Map(
+    (breakdownTargetIntakeQuery.data?.fields ?? []).map((field) => [field.key, field]),
+  );
   const breakdownIntakeStageName =
     breakdownTargetIntakeQuery.data?.stageName ?? breakdownEntryStage?.name ?? null;
   const breakdownIntakeStageId = breakdownTargetIntakeQuery.data?.stageId ?? null;
@@ -1294,15 +1606,14 @@ export function PipelineSettings() {
     whenFinishedName: breakdownWhenFinishedMoveTo
       ? stageKeyToName.get(breakdownWhenFinishedMoveTo) ?? breakdownWhenFinishedMoveTo
       : null,
-    inheritedFieldLabels: breakdownInheritFields.map(
-      (key) => breakdownInheritFieldOptions.find((field) => field.key === key)?.label ?? key,
-    ),
+    inheritedFieldLabels: breakdownSelectedCarryOverFields.map((field) => field.label),
   };
   const breakdownConfigForCopy = {
     targetPipelineId: breakdownTargetPipelineId,
     targetStageKey: breakdownTargetStageKey,
     pieceNoun: breakdownPieceNoun.trim() || "piece",
-    inheritFields: breakdownInheritFields,
+    inheritFields: breakdownSelectedCarryOverFields.map((field) => field.key),
+    carryOverPolicy: carryOverPolicyForSave(breakdownCarryOverPolicy, breakdownCarryOverFieldOptions),
     advanceTo: breakdownAdvanceTo || null,
     waitForPieces: breakdownWaitForPieces,
     whenFinishedMoveTo: breakdownWhenFinishedMoveTo || null,
@@ -1378,7 +1689,6 @@ export function PipelineSettings() {
                 onChange={(event) => {
                   setBreakdownTargetPipelineId(event.target.value);
                   setBreakdownTargetStageKey("");
-                  setBreakdownInheritFields([]);
                 }}
                 className="h-10 w-full max-w-sm rounded-md border border-input bg-background px-3 text-sm"
               >
@@ -1423,12 +1733,15 @@ export function PipelineSettings() {
           </FieldRow>
           <FieldRow label="Carry over">
             <div className="space-y-2">
-              {breakdownTargetPipelineId ? (
-                <div className="space-y-1 rounded-md border border-dashed border-border bg-muted/30 px-3 py-2 text-xs">
+              <div className="space-y-1 rounded-md border border-dashed border-border bg-muted/30 px-3 py-2 text-xs">
+                <p className="text-muted-foreground">
+                  Values are copied from this item and its ancestors. New eligible fields stay on unless you uncheck them.
+                </p>
+                {breakdownTargetPipelineId ? (
                   <div className="flex flex-wrap items-center gap-1 text-muted-foreground">
-                    <span>Fields come from</span>
+                    <span>Destination validation:</span>
                     <span className="font-medium text-foreground">
-                      {breakdownTargetPipeline?.name ?? "the destination pipeline"}
+                      {breakdownTargetPipeline?.name ?? "selected pipeline"}
                     </span>
                     {breakdownIntakeStageName ? (
                       <>
@@ -1437,62 +1750,81 @@ export function PipelineSettings() {
                       </>
                     ) : null}
                   </div>
-                  {breakdownIntakeSettingsHref ? (
-                    <Link
-                      to={breakdownIntakeSettingsHref}
-                      className="inline-flex items-center gap-1 font-medium text-primary hover:underline"
-                    >
-                      Edit these fields
-                      <ArrowUpRight className="h-3 w-3" />
-                    </Link>
-                  ) : null}
-                  {breakdownTargetArchived ? (
-                    <p className="flex items-center gap-1 text-amber-700 dark:text-amber-300">
-                      <Archive className="h-3 w-3 shrink-0" />
-                      This pipeline is archived, so its intake fields can't be edited until it's restored.
-                    </p>
-                  ) : null}
+                ) : null}
+                {breakdownIntakeSettingsHref ? (
+                  <Link
+                    to={breakdownIntakeSettingsHref}
+                    className="inline-flex items-center gap-1 font-medium text-primary hover:underline"
+                  >
+                    Review destination fields
+                    <ArrowUpRight className="h-3 w-3" />
+                  </Link>
+                ) : null}
+                {breakdownTargetArchived ? (
+                  <p className="flex items-center gap-1 text-amber-700 dark:text-amber-300">
+                    <Archive className="h-3 w-3 shrink-0" />
+                    This destination pipeline is archived, so its validation fields can't be edited until it's restored.
+                  </p>
+                ) : null}
+              </div>
+              {breakdownCarryOverFieldGroups.length > 0 ? (
+                <div className="space-y-3">
+                  {breakdownCarryOverFieldGroups.map((group) => (
+                    <div key={group.id} className="space-y-1.5">
+                      <div className="text-xs font-medium text-muted-foreground">
+                        {group.label}
+                        {group.description ? (
+                          <span className="ml-1 font-normal">· {group.description}</span>
+                        ) : null}
+                      </div>
+                      <div className="space-y-1.5">
+                        {group.fields.map((field) => {
+                          const checked = isCarryOverFieldEnabled(breakdownCarryOverPolicy, field.key);
+                          const targetField = breakdownTargetFieldByKey.get(field.key);
+                          return (
+                            <label
+                              key={`${group.id}:${field.key}`}
+                              className="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={(event) => {
+                                  setBreakdownCarryOverPolicy((current) =>
+                                    toggleCarryOverField(
+                                      current,
+                                      breakdownCarryOverFieldOptions,
+                                      field.key,
+                                      event.target.checked,
+                                    ),
+                                  );
+                                }}
+                              />
+                              <span className="flex-1">{field.label}</span>
+                              {targetField?.required ? (
+                                <span className="text-xs text-muted-foreground">
+                                  Required by {breakdownTargetPipeline?.name ?? "destination"}
+                                </span>
+                              ) : targetField ? (
+                                <span className="text-xs text-muted-foreground">
+                                  Validated by {breakdownTargetPipeline?.name ?? "destination"}
+                                </span>
+                              ) : null}
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               ) : null}
-              {breakdownInheritFieldOptions.length > 0 ? (
-                <div className="space-y-1.5">
-                  {breakdownInheritFieldOptions.map((field) => {
-                    const checked = breakdownInheritFields.includes(field.key);
-                    return (
-                      <label
-                        key={field.key}
-                        className="flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={(event) => {
-                            setBreakdownInheritFields((current) =>
-                              event.target.checked
-                                ? [...current, field.key]
-                                : current.filter((key) => key !== field.key),
-                            );
-                          }}
-                        />
-                        <span className="flex-1">{field.label}</span>
-                        {field.required ? (
-                          <span className="text-xs text-muted-foreground">
-                            (required by {breakdownTargetPipeline?.name ?? "destination"})
-                          </span>
-                        ) : null}
-                      </label>
-                    );
-                  })}
-                </div>
-              ) : (
+              {breakdownCarryOverFieldGroups.length === 0 ? (
                 <p className="text-sm text-muted-foreground">
-                  {breakdownTargetPipelineId
-                    ? "This pipeline has no fields to carry over yet."
-                    : "Pick a pipeline to choose fields to carry over."}
+                  This pipeline and its ancestors do not define any fields that can be carried over yet.
                 </p>
-              )}
+              ) : null}
               <p className="text-xs text-muted-foreground">
-                Fields from this pipeline copied onto each piece
+                Name and title fields are kept unique for each new {breakdownPieceNoun.trim() || "piece"}.
               </p>
             </div>
           </FieldRow>
@@ -1947,6 +2279,7 @@ export function PipelineSettings() {
                           ) : null}
                           <div data-testid="stage-instructions-editor">
                             <MarkdownEditor
+                              ref={instructionsEditorRef}
                               value={instructionsBody}
                               onChange={setInstructionsBody}
                               placeholder={
@@ -1964,6 +2297,10 @@ export function PipelineSettings() {
                               }}
                             />
                           </div>
+                          <CarriedFieldTokenHelper
+                            groups={incomingCarryOverFieldGroups}
+                            onInsert={insertIncomingCarryOverToken}
+                          />
                         </>
                       ) : (
                         <EmptyState
@@ -1998,6 +2335,7 @@ export function PipelineSettings() {
                           preserveUnmatchedVariables
                           allowManualVariables
                           manualVariableNamesSeed={savedManualVariableNames}
+                          resolvedTemplateVariableNames={incomingCarryOverFieldKeys}
                           heading="Intake fields"
                           descriptionText="Fields shown when a new item starts here. Placeholders in automation instructions are added automatically; manual fields stay until you remove them."
                           emptyMessage="No intake fields yet. Add a field manually or use a {{placeholder}} in the automation instructions."

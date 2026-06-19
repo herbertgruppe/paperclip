@@ -35,16 +35,46 @@ describe("readStageBreakdown", () => {
       targetStageKey: "intake",
       pieceNoun: "feature",
       inheritFields: ["release", "owner"],
+      carryOverPolicy: {
+        version: 1,
+        mode: "only",
+        includeFields: ["release", "owner"],
+        excludeFields: [],
+      },
       advanceTo: "review",
       waitForPieces: true,
       whenFinishedMoveTo: "ship",
     } satisfies StageBreakdownConfig);
   });
 
+  it("reads versioned all-except carry-over policy", () => {
+    const config = readStageBreakdown({
+      config: {
+        breakdown: {
+          targetPipelineId: "pipe-1",
+          targetStageKey: "intake",
+          carryOverPolicy: { version: 1, mode: "all_except", excludeFields: ["owner"] },
+        },
+      },
+    });
+    expect(config?.carryOverPolicy).toEqual({
+      version: 1,
+      mode: "all_except",
+      includeFields: [],
+      excludeFields: ["owner"],
+    });
+  });
+
   it("defaults the noun to 'piece' when absent", () => {
     const config = readStageBreakdown({ config: { breakdown: { targetPipelineId: "p", targetStageKey: "s" } } });
     expect(config?.pieceNoun).toBe("piece");
     expect(config?.waitForPieces).toBe(false);
+    expect(config?.carryOverPolicy).toEqual({
+      version: 1,
+      mode: "only",
+      includeFields: [],
+      excludeFields: [],
+    });
   });
 });
 
@@ -69,6 +99,12 @@ const baseConfig: StageBreakdownConfig = {
   targetStageKey: "intake",
   pieceNoun: "feature",
   inheritFields: ["release", "owner"],
+  carryOverPolicy: {
+    version: 1,
+    mode: "only",
+    includeFields: ["release", "owner"],
+    excludeFields: [],
+  },
   advanceTo: "review",
   waitForPieces: true,
   whenFinishedMoveTo: "ship",

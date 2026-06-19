@@ -17,13 +17,69 @@ export interface StageBreakdownConfig {
   targetStageKey: string;
   pieceNoun: string;
   inheritFields: string[];
+  carryOverPolicy?: BreakdownCarryOverPolicy;
   advanceTo: string | null;
   waitForPieces: boolean;
   whenFinishedMoveTo: string | null;
 }
 
+export type BreakdownCarryOverMode = "all_except" | "only";
+
+export interface BreakdownCarryOverPolicy {
+  version: 1;
+  mode: BreakdownCarryOverMode;
+  includeFields: string[];
+  excludeFields: string[];
+}
+
 function asString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function asStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set<string>();
+  return value.flatMap((entry) => {
+    const key = asString(entry);
+    if (!key || seen.has(key)) return [];
+    seen.add(key);
+    return [key];
+  });
+}
+
+function readCarryOverPolicy(record: Record<string, unknown>, inheritFields: string[]): BreakdownCarryOverPolicy {
+  const raw = record.carryOverPolicy;
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    const policy = raw as Record<string, unknown>;
+    const mode = policy.mode === "all_except" || policy.mode === "only" ? policy.mode : "all_except";
+    return {
+      version: 1,
+      mode,
+      includeFields: asStringList(policy.includeFields),
+      excludeFields: asStringList(policy.excludeFields),
+    };
+  }
+  return {
+    version: 1,
+    mode: "only",
+    includeFields: inheritFields,
+    excludeFields: [],
+  };
+}
+
+export function isCarryOverIdentityFieldKey(key: string) {
+  const normalized = key.replace(/[^A-Za-z0-9]/g, "").toLowerCase();
+  return normalized === "name" ||
+    normalized === "title" ||
+    normalized === "casename" ||
+    normalized === "casetitle";
+}
+
+export function isCarryOverFieldEnabled(policy: BreakdownCarryOverPolicy | null | undefined, key: string) {
+  if (!policy) return false;
+  if (isCarryOverIdentityFieldKey(key)) return false;
+  if (policy.mode === "only") return policy.includeFields.includes(key);
+  return !policy.excludeFields.includes(key);
 }
 
 /**
@@ -41,11 +97,13 @@ export function readStageBreakdown(
   const inheritFields = Array.isArray(record.inheritFields)
     ? record.inheritFields.filter((field): field is string => typeof field === "string" && field.trim().length > 0).map((field) => field.trim())
     : [];
+  const carryOverPolicy = readCarryOverPolicy(record, inheritFields);
   return {
     targetPipelineId: asString(record.targetPipelineId),
     targetStageKey: asString(record.targetStageKey),
     pieceNoun: asString(record.pieceNoun) || "piece",
     inheritFields,
+    carryOverPolicy,
     advanceTo: asString(record.advanceTo) || null,
     waitForPieces: record.waitForPieces === true,
     whenFinishedMoveTo: asString(record.whenFinishedMoveTo) || null,
