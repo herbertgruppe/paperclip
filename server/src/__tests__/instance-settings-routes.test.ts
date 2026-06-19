@@ -269,6 +269,25 @@ describe("instance settings routes", () => {
     });
   });
 
+  it("allows non-admin board users with company access to update experimental settings", async () => {
+    const app = await createApp({
+      type: "board",
+      userId: "user-1",
+      source: "session",
+      isInstanceAdmin: false,
+      companyIds: ["company-1"],
+    });
+
+    await request(app)
+      .patch("/api/instance/settings/experimental")
+      .send({ enableTaskWatchdogs: true })
+      .expect(200);
+
+    expect(mockInstanceSettingsService.updateExperimental).toHaveBeenCalledWith({
+      enableTaskWatchdogs: true,
+    });
+  });
+
   it("allows local board users to read and update general settings", async () => {
     const app = await createApp({
       type: "board",

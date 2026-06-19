@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Clock, FlaskConical, Play, Search } from "lucide-react";
 import type {
+  InstanceExperimentalSettings,
   IssueGraphLivenessAutoRecoveryPreview,
   PatchInstanceExperimentalSettings,
 } from "@paperclipai/shared";
@@ -142,17 +143,39 @@ export function InstanceExperimentalSettings() {
     queryFn: () => instanceSettingsApi.getExperimental(),
   });
 
-  const toggleMutation = useMutation({
+  const toggleMutation = useMutation<
+    InstanceExperimentalSettings,
+    Error,
+    PatchInstanceExperimentalSettings,
+    { previousSettings?: InstanceExperimentalSettings }
+  >({
     mutationFn: async (patch: PatchInstanceExperimentalSettings) =>
       instanceSettingsApi.updateExperimental(patch),
-    onSuccess: async () => {
+    onMutate: async (patch) => {
+      await queryClient.cancelQueries({ queryKey: queryKeys.instance.experimentalSettings });
+      const previousSettings = queryClient.getQueryData<InstanceExperimentalSettings>(
+        queryKeys.instance.experimentalSettings,
+      );
+      if (previousSettings) {
+        queryClient.setQueryData<InstanceExperimentalSettings>(
+          queryKeys.instance.experimentalSettings,
+          { ...previousSettings, ...patch },
+        );
+      }
+      return { previousSettings };
+    },
+    onSuccess: async (updatedSettings) => {
       setActionError(null);
+      queryClient.setQueryData(queryKeys.instance.experimentalSettings, updatedSettings);
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: queryKeys.instance.experimentalSettings }),
         queryClient.invalidateQueries({ queryKey: queryKeys.health }),
       ]);
     },
-    onError: (error) => {
+    onError: (error, _patch, context) => {
+      if (context?.previousSettings) {
+        queryClient.setQueryData(queryKeys.instance.experimentalSettings, context.previousSettings);
+      }
       setActionError(error instanceof Error ? error.message : "Failed to update experimental settings.");
     },
   });

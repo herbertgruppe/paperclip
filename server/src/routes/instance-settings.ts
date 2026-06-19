@@ -64,7 +64,8 @@ export function instanceSettingsRoutes(db: Db) {
 
   router.get("/instance/settings/experimental", async (req, res) => {
     // Experimental settings are readable by any authenticated org member
-    // or instance admin. Only PATCH requires instance-admin.
+    // or instance admin. Board org members may also update experimental
+    // toggles because these flags directly control visible board surfaces.
     assertBoardOrgAccess(req);
     res.json(await svc.getExperimental());
   });
@@ -73,7 +74,7 @@ export function instanceSettingsRoutes(db: Db) {
     "/instance/settings/experimental",
     validate(patchInstanceExperimentalSettingsSchema),
     async (req, res) => {
-      assertCanManageInstanceSettings(req);
+      assertBoardOrgAccess(req);
       const updated = await svc.updateExperimental(req.body);
       const actor = getActorInfo(req);
       const companyIds = await svc.listCompanyIds();

@@ -3,6 +3,7 @@
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { InstanceExperimentalSettings as InstanceExperimentalSettingsPayload } from "@paperclipai/shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { InstanceExperimentalSettings } from "./InstanceExperimentalSettings";
 
@@ -42,9 +43,26 @@ const CONFERENCE_TOGGLE_SELECTOR =
 const TASK_WATCHDOGS_TOGGLE_SELECTOR =
   'button[aria-label="Toggle task watchdogs experimental setting"]';
 
+function defaultExperimentalSettings(): InstanceExperimentalSettingsPayload {
+  return {
+    enableEnvironments: false,
+    enableIsolatedWorkspaces: false,
+    enableStreamlinedLeftNavigation: false,
+    enableConferenceRoomChat: false,
+    enableIssuePlanDecompositions: false,
+    enableExperimentalFileViewer: false,
+    enableTaskWatchdogs: false,
+    enableCloudSync: false,
+    autoRestartDevServerWhenIdle: false,
+    enableIssueGraphLivenessAutoRecovery: false,
+    issueGraphLivenessAutoRecoveryLookbackHours: 24,
+  };
+}
+
 describe("InstanceExperimentalSettings — Conference Room Chat card (PAP-11233)", () => {
   let container: HTMLDivElement;
   let root: Root | null = null;
+  let currentExperimentalSettings: InstanceExperimentalSettingsPayload;
 
   async function renderPage() {
     root = createRoot(container);
@@ -64,11 +82,14 @@ describe("InstanceExperimentalSettings — Conference Room Chat card (PAP-11233)
   beforeEach(() => {
     container = document.createElement("div");
     document.body.appendChild(container);
-    mockInstanceSettingsApi.getExperimental.mockResolvedValue({
-      enableConferenceRoomChat: false,
-      issueGraphLivenessAutoRecoveryLookbackHours: 24,
+    currentExperimentalSettings = defaultExperimentalSettings();
+    mockInstanceSettingsApi.getExperimental.mockImplementation(async () => ({
+      ...currentExperimentalSettings,
+    }));
+    mockInstanceSettingsApi.updateExperimental.mockImplementation(async (patch) => {
+      currentExperimentalSettings = { ...currentExperimentalSettings, ...patch };
+      return { ...currentExperimentalSettings };
     });
-    mockInstanceSettingsApi.updateExperimental.mockResolvedValue({});
   });
 
   afterEach(() => {
@@ -90,10 +111,10 @@ describe("InstanceExperimentalSettings — Conference Room Chat card (PAP-11233)
   });
 
   it("does not render the toggle even when the stored flag is currently enabled", async () => {
-    mockInstanceSettingsApi.getExperimental.mockResolvedValue({
+    currentExperimentalSettings = {
+      ...currentExperimentalSettings,
       enableConferenceRoomChat: true,
-      issueGraphLivenessAutoRecoveryLookbackHours: 24,
-    });
+    };
     await renderPage();
 
     const toggle = container.querySelector(CONFERENCE_TOGGLE_SELECTOR);
@@ -120,11 +141,8 @@ describe("InstanceExperimentalSettings — Conference Room Chat card (PAP-11233)
     expect(mockInstanceSettingsApi.updateExperimental).toHaveBeenCalledWith({
       enableTaskWatchdogs: true,
     });
+    expect(toggle?.getAttribute("aria-checked")).toBe("true");
 
-    mockInstanceSettingsApi.getExperimental.mockResolvedValue({
-      enableTaskWatchdogs: true,
-      issueGraphLivenessAutoRecoveryLookbackHours: 24,
-    });
     flushSync(() => {
       root?.unmount();
     });
