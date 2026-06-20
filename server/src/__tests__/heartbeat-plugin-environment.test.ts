@@ -202,12 +202,14 @@ describeEmbeddedPostgres("heartbeat plugin environments", () => {
       expect(latest?.status).toBe("succeeded");
     }, { timeout: 5_000 });
 
-    expect(workerManager.call).toHaveBeenCalledWith(pluginId, "environmentAcquireLease", {
+    expect(workerManager.call).toHaveBeenNthCalledWith(1, pluginId, "environmentAcquireLease", {
       driverKey: "sandbox",
       companyId,
       environmentId,
+      executionWorkspaceId: expect.any(String),
       issueId: null,
       config: { template: "base" },
+      agentId,
       runId: run!.id,
       workspaceMode: "shared_workspace",
       // Pins the HEARTBEAT-path lease call forwarding the AGENT's adapter type
@@ -235,7 +237,7 @@ describeEmbeddedPostgres("heartbeat plugin environments", () => {
     expect(adapterExecute).toHaveBeenCalledTimes(1);
   }, 15_000);
 
-  it("ignores stale non-reused workspace environment config in favor of the issue selection", async () => {
+  it("ignores stale non-reused workspace environment config in favor of the assignee selection", async () => {
     const companyId = randomUUID();
     const projectId = randomUUID();
     const workspaceId = randomUUID();
@@ -368,7 +370,7 @@ describeEmbeddedPostgres("heartbeat plugin environments", () => {
       adapterType: "codex_local",
       adapterConfig: {},
       runtimeConfig: {},
-      defaultEnvironmentId: oldEnvironmentId,
+      defaultEnvironmentId: newEnvironmentId,
       permissions: {},
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -405,7 +407,6 @@ describeEmbeddedPostgres("heartbeat plugin environments", () => {
       executionWorkspaceId: staleExecutionWorkspaceId,
       executionWorkspaceSettings: {
         mode: "shared_workspace",
-        environmentId: newEnvironmentId,
       },
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -424,12 +425,14 @@ describeEmbeddedPostgres("heartbeat plugin environments", () => {
       expect(latest?.status).toBe("succeeded");
     }, { timeout: 5_000 });
 
-    expect(workerManager.call).toHaveBeenCalledWith(pluginId, "environmentAcquireLease", {
+    expect(workerManager.call).toHaveBeenNthCalledWith(1, pluginId, "environmentAcquireLease", {
       driverKey: "sandbox",
       companyId,
       environmentId: newEnvironmentId,
+      executionWorkspaceId: expect.any(String),
       issueId,
       config: { template: "new" },
+      agentId,
       runId: run!.id,
       workspaceMode: "shared_workspace",
       adapterType: "codex_local",

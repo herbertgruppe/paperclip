@@ -79,11 +79,12 @@ export function normalizeExperimentalSettings(raw: unknown): InstanceExperimenta
 function toInstanceSettings(row: typeof instanceSettings.$inferSelect): InstanceSettings {
   return {
     id: row.id,
+    defaultEnvironmentId: row.defaultEnvironmentId ?? null,
     general: normalizeGeneralSettings(row.general),
     experimental: normalizeExperimentalSettings(row.experimental),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
-  };
+  } as InstanceSettings;
 }
 
 export function instanceSettingsService(db: Db) {
