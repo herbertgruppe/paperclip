@@ -87,7 +87,6 @@ describeEmbeddedPostgres("environment runtime driver contract", () => {
   }) {
     const companyId = randomUUID();
     const agentId = randomUUID();
-    const environmentId = randomUUID();
     const runId = randomUUID();
     const now = new Date();
     let config = input.config;
@@ -135,16 +134,26 @@ describeEmbeddedPostgres("environment runtime driver contract", () => {
         },
       };
     }
-    await db.insert(environments).values({
-      id: environmentId,
-      companyId,
-      name: `${input.driver} contract`,
-      driver: input.driver,
-      status: "active",
-      config,
-      createdAt: now,
-      updatedAt: now,
-    });
+    const existingLocal =
+      input.driver === "local"
+        ? await db.query.environments.findFirst({
+            where: (environment, { eq }) => eq(environment.driver, "local"),
+          })
+        : null;
+    const environmentId = existingLocal?.id ?? randomUUID();
+    if (!existingLocal) {
+      await db.insert(environments).values({
+        id: environmentId,
+        name: `${input.driver} contract`,
+        driver: input.driver,
+        status: "active",
+        config,
+        createdAt: now,
+        updatedAt: now,
+      });
+    } else {
+      config = (existingLocal.config as Record<string, unknown> | null) ?? {};
+    }
     await db.insert(heartbeatRuns).values({
       id: runId,
       companyId,
