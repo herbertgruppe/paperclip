@@ -195,10 +195,20 @@ function sortExternalObjectGroups(groups: IssueExternalObjectGroup[]) {
   });
 }
 
+function externalObjectRowDisplayKey(group: IssueExternalObjectGroup): string {
+  const { pill } = group;
+  const displayKey = pill.displayKey?.trim();
+  if (displayKey) return displayKey;
+  if (pill.providerKey === "github") {
+    if (pill.objectType === "pull_request") return "Github Pull Request";
+    if (pill.objectType === "issue") return "Github Issue";
+  }
+  return `${externalObjectProviderLabel(pill.providerKey)} ${externalObjectTypeLabel(pill.objectType)}`;
+}
+
 function externalObjectRowLabel(group: IssueExternalObjectGroup): React.ReactNode {
   const { pill } = group;
-  const displayKey = pill.displayKey?.trim()
-    || `${externalObjectProviderLabel(pill.providerKey)} ${externalObjectTypeLabel(pill.objectType)}`;
+  const displayKey = externalObjectRowDisplayKey(group);
   const Icon = externalObjectIconForKey(pill.iconKey);
   return (
     <span className="inline-flex min-w-0 items-center gap-1">

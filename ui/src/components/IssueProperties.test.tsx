@@ -1811,7 +1811,7 @@ describe("IssueProperties", () => {
           pill: {
             providerKey: "github",
             objectType: "pull_request",
-            displayKey: "Github Pull Request",
+            displayKey: null,
             iconKey: "github",
             statusCategory: "succeeded",
             statusIconKey: "git-merge",
