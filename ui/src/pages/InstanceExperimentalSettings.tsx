@@ -232,7 +232,7 @@ export function InstanceExperimentalSettings() {
 
   const enableEnvironments = experimentalQuery.data?.enableEnvironments === true;
   const enableIsolatedWorkspaces = experimentalQuery.data?.enableIsolatedWorkspaces === true;
-  // Default ON (PAPA-952): treat anything but an explicit `false` as enabled so
+  // Default ON: treat anything but an explicit `false` as enabled so
   // the toggle reflects the streamlined sidebar being the default experience.
   const enableStreamlinedLeftNavigation =
     experimentalQuery.data?.enableStreamlinedLeftNavigation !== false;
