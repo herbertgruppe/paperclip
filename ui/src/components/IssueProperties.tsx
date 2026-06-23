@@ -2260,6 +2260,7 @@ export function IssueProperties({
                       object={pill}
                       sourceCount={mentionCount}
                       sourceSummary={sourceLabels.join(", ")}
+                      showProviderIcon={false}
                     />
                   </PropertyRow>
                 );

@@ -38,23 +38,41 @@ function githubObjectLabel(url: string | null | undefined): string | null {
     if (parsed.hostname !== "github.com") return null;
     const [, owner, repo, kind, number] = parsed.pathname.split("/");
     if (!owner || !repo || !number) return null;
-    if (kind !== "pull" && kind !== "issues") return null;
-    return `${owner}/${repo}#${number}`;
+    if (kind === "pull") return `PR ${number}`;
+    if (kind === "issues") return `Issue ${number}`;
+    return null;
   } catch {
     return null;
   }
 }
 
-function externalObjectValueLabel(object: ExternalObjectPillData, fallback: string): string {
+function externalObjectValueLabel(
+  object: ExternalObjectPillData,
+  fallback: string,
+  statusLabel: string,
+): string {
   const githubLabel = object.providerKey === "github" ? githubObjectLabel(object.url) : null;
-  return githubLabel ?? object.displayTitle?.trim() ?? fallback;
+  const base = githubLabel ?? object.displayTitle?.trim() ?? fallback;
+  return statusLabel ? `${base} - ${statusLabel}` : base;
 }
 
-function externalObjectPillTone(object: ExternalObjectPillData): string {
-  if (object.statusIconKey === "git-merge") {
+function isMergedExternalObject(object: ExternalObjectPillData, statusLabel: string): boolean {
+  return object.statusIconKey === "git-merge" || statusLabel.toLowerCase() === "merged";
+}
+
+function externalObjectPillTone(object: ExternalObjectPillData, statusLabel: string): string {
+  if (isMergedExternalObject(object, statusLabel)) {
     return "text-violet-600 border-violet-600 dark:text-violet-400 dark:border-violet-400";
   }
   return externalObjectStatusIcon[object.statusCategory] ?? externalObjectStatusIconDefault;
+}
+
+function externalObjectStatusIconKey(
+  object: ExternalObjectPillData,
+  statusLabel: string,
+): string | null | undefined {
+  if (isMergedExternalObject(object, statusLabel)) return object.statusIconKey ?? "git-merge";
+  return object.statusIconKey;
 }
 
 interface ExternalObjectPillProps {
@@ -71,6 +89,11 @@ interface ExternalObjectPillProps {
    * non-interactive contexts like the property panel). Defaults to false.
    */
   inert?: boolean;
+  /**
+   * Hide the provider icon when the surrounding UI already names the provider.
+   * The status icon still renders as the single state glyph inside the pill.
+   */
+  showProviderIcon?: boolean;
 }
 
 /**
@@ -84,14 +107,16 @@ export function ExternalObjectPill({
   className,
   children,
   inert,
+  showProviderIcon = true,
 }: ExternalObjectPillProps) {
-  const tone = externalObjectPillTone(object);
   const overlay = externalObjectLivenessOverlay[object.liveness] ?? "";
   const providerLabel = externalObjectProviderLabel(object.providerKey);
   const typeLabel = externalObjectTypeLabel(object.objectType);
   const displayKey = object.displayKey?.trim() || `${providerLabel} ${typeLabel}`;
-  const valueLabel = externalObjectValueLabel(object, displayKey);
   const statusLabel = object.statusLabel ?? externalObjectCategoryLabel(object.statusCategory);
+  const tone = externalObjectPillTone(object, statusLabel);
+  const valueLabel = externalObjectValueLabel(object, displayKey, statusLabel);
+  const statusIconKey = externalObjectStatusIconKey(object, statusLabel);
   const livenessLabel = externalObjectLivenessLabel(object.liveness);
   const ProviderIcon = externalObjectIconForKey(object.iconKey);
   const ariaLabel = `${providerLabel} ${typeLabel} — ${statusLabel}${
@@ -115,16 +140,13 @@ export function ExternalObjectPill({
     : object.displayTitle ?? displayKey;
   const labelText = children ?? (
     <>
-      <span className="inline-flex items-center gap-0.5 rounded-full border border-current bg-background/70 px-1 text-[10px] font-medium">
-        <ExternalObjectStatusIcon
-          category={object.statusCategory}
-          liveness={object.liveness}
-          statusIconKey={object.statusIconKey}
-          sizeClassName="h-2.5 w-2.5"
-          label={`${providerLabel}: ${statusLabel}`}
-        />
-        <span>{statusLabel}</span>
-      </span>
+      <ExternalObjectStatusIcon
+        category={object.statusCategory}
+        liveness={object.liveness}
+        statusIconKey={statusIconKey}
+        sizeClassName="h-3 w-3"
+        label={`${providerLabel}: ${statusLabel}`}
+      />
       <span className="max-w-[16rem] truncate font-medium">{valueLabel}</span>
     </>
   );
@@ -133,17 +155,9 @@ export function ExternalObjectPill({
   ) : null;
   const innerContent = (
     <>
-      {ProviderIcon ? (
+      {showProviderIcon && ProviderIcon ? (
         <ProviderIcon aria-hidden="true" className="h-3 w-3 shrink-0" />
-      ) : (
-        <ExternalObjectStatusIcon
-          category={object.statusCategory}
-          liveness={object.liveness}
-          statusIconKey={object.statusIconKey}
-          sizeClassName="h-3 w-3"
-          label={`${providerLabel}: ${statusLabel}`}
-        />
-      )}
+      ) : null}
       <span className="inline-flex min-w-0 items-center gap-1">
         {labelText}
       </span>

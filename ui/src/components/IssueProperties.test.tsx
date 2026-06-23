@@ -1855,7 +1855,7 @@ describe("IssueProperties", () => {
 
     expect(container.textContent).toContain("Github Pull Request");
     expect(container.textContent).toContain("Github Issue");
-    expect(container.textContent).toContain("acme/web#241");
+    expect(container.textContent).toContain("PR 241 - Merged");
     expect(container.textContent).toContain("Merged");
     expect(container.textContent).toContain("Open");
     expect(container.textContent).not.toContain("External objects");
@@ -1864,9 +1864,10 @@ describe("IssueProperties", () => {
     expect(label?.querySelector("svg")).toBeTruthy();
     const pullRequestLink = Array.from(container.querySelectorAll("a"))
       .find((anchor) => anchor.getAttribute("href") === "https://github.com/acme/web/pull/241");
-    expect(pullRequestLink?.textContent).toContain("acme/web#241");
-    expect(pullRequestLink?.textContent).toContain("Merged");
+    expect(pullRequestLink?.textContent).toContain("PR 241 - Merged");
+    expect(pullRequestLink?.textContent).not.toContain("acme/web#241");
     expect(pullRequestLink?.textContent).not.toContain("Github Pull Request");
+    expect(pullRequestLink?.querySelectorAll("svg")).toHaveLength(1);
 
     act(() => root.unmount());
   });
