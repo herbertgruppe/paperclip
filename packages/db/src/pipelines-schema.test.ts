@@ -87,7 +87,7 @@ describeEmbeddedPostgres("pipeline schema", () => {
       pipelineId: pipeline.id,
       key: "intake",
       name: "Intake",
-      kind: "open",
+      kind: "working",
       position: 0,
     }).returning();
     const [reviewStage] = await db.insert(pipelineStages).values({
@@ -102,7 +102,7 @@ describeEmbeddedPostgres("pipeline schema", () => {
         pipelineId: pipeline.id,
         key: "intake",
         name: "Duplicate Intake",
-        kind: "open",
+        kind: "working",
         position: 2,
       }),
     );

@@ -34,6 +34,7 @@ export const pipelineCaseEvents = pgTable(
         'lease_released',
         'lease_expired',
         'transitioned',
+        'transition_forced',
         'transition_suggested',
         'suggestion_resolved',
         'review_decided',
@@ -42,9 +43,14 @@ export const pipelineCaseEvents = pgTable(
         'issue_unlinked',
         'automation_executed',
         'automation_failed',
+        'automation_retry_requested',
+        'automation_effects_retired',
+        'automation_retry_dispatched',
         'blockers_set',
         'blockers_resolved',
-        'children_terminal'
+        'children_terminal',
+        'upstream_drift',
+        'drift_acknowledged'
       )`,
     ),
     actorTypeCheck: check("pipeline_case_events_actor_type_check", sql`${table.actorType} in ('user', 'agent', 'system')`),

@@ -1,4 +1,5 @@
-ALTER TABLE "pipeline_case_events" DROP CONSTRAINT "pipeline_case_events_type_check";--> statement-breakpoint
+-- 0114 expands pipeline case events for upstream drift while tolerating later event types already present from old branch numbering.
+ALTER TABLE "pipeline_case_events" DROP CONSTRAINT IF EXISTS "pipeline_case_events_type_check";--> statement-breakpoint
 ALTER TABLE "pipeline_case_events" ADD CONSTRAINT "pipeline_case_events_type_check" CHECK ("pipeline_case_events"."type" in (
         'ingested',
         'updated',
@@ -6,6 +7,7 @@ ALTER TABLE "pipeline_case_events" ADD CONSTRAINT "pipeline_case_events_type_che
         'lease_released',
         'lease_expired',
         'transitioned',
+        'transition_forced',
         'transition_suggested',
         'suggestion_resolved',
         'review_decided',
@@ -14,7 +16,12 @@ ALTER TABLE "pipeline_case_events" ADD CONSTRAINT "pipeline_case_events_type_che
         'issue_unlinked',
         'automation_executed',
         'automation_failed',
+        'automation_retry_requested',
+        'automation_effects_retired',
+        'automation_retry_dispatched',
         'blockers_set',
         'blockers_resolved',
-        'children_terminal'
+        'children_terminal',
+        'upstream_drift',
+        'drift_acknowledged'
       ));

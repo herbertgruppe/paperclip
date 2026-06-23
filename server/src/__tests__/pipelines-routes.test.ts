@@ -4,8 +4,10 @@ import express from "express";
 import request from "supertest";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
+  activityLog,
   agents,
   companies,
+  companyMemberships,
   createDb,
   documents,
   documentRevisions,
@@ -21,6 +23,7 @@ import {
   pipelineStages,
   pipelineTransitions,
   pipelines,
+  principalPermissionGrants,
   routineRuns,
   routines,
 } from "@paperclipai/db";
@@ -67,11 +70,14 @@ describeEmbeddedPostgres("pipeline routes", () => {
     await db.delete(documentRevisions);
     await db.delete(documents);
     await db.delete(issueComments);
+    await db.delete(activityLog);
     await db.delete(routineRuns);
     await db.delete(heartbeatRuns);
     await db.delete(issues);
     await db.delete(pipelines);
     await db.delete(routines);
+    await db.delete(principalPermissionGrants);
+    await db.delete(companyMemberships);
     await db.delete(agents);
     await db.delete(companies);
   });
@@ -250,6 +256,20 @@ describeEmbeddedPostgres("pipeline routes", () => {
       role: "engineer",
       adapterType: "codex_local",
     }).returning();
+    await db.insert(companyMemberships).values({
+      companyId: company.id,
+      principalType: "agent",
+      principalId: agent!.id,
+      status: "active",
+      membershipRole: "member",
+    });
+    await db.insert(principalPermissionGrants).values({
+      companyId: company.id,
+      principalType: "agent",
+      principalId: agent!.id,
+      permissionKey: "pipelines:write",
+      scope: null,
+    });
     const runId = randomUUID();
     const agentActor: Express.Request["actor"] = {
       type: "agent",

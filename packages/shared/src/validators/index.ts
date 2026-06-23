@@ -505,6 +505,25 @@ export {
 } from "./asset.js";
 
 export {
+  pipelineAutomationRetryCleanupOptionsSchema,
+  pipelineAutomationRetryRequestSchema,
+  pipelineAutomationRetryScopeSchema,
+  pipelineStageApproverSchema,
+  pipelineStageConfigSchema,
+  pipelineStageKindSchema,
+  pipelineStageOnEnterSchema,
+  pipelineStageVariableSchema,
+  type PipelineAutomationRetryCleanupOptions,
+  type PipelineAutomationRetryRequest,
+  type PipelineAutomationRetryScope,
+  type PipelineStageApprover,
+  type PipelineStageConfig,
+  type PipelineStageKind,
+  type PipelineStageOnEnter,
+  type PipelineStageVariable,
+} from "./pipeline.js";
+
+export {
   createCompanyInviteSchema,
   createOpenClawInvitePromptSchema,
   acceptInviteSchema,

@@ -46,6 +46,7 @@ export {
   pipelineCaseIssueLinks,
   pipelineCaseBlockers,
   pipelineDocuments,
+  pipelineCaseDocuments,
   pipelineAutomationExecutions,
 } from "./pipeline_cases.js";
 export { pipelineCaseEvents } from "./pipeline_case_events.js";
