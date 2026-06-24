@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { queryKeys } from "../lib/queryKeys";
-import { groupCasesByBuiltFor, normalizePipelineConversationComments } from "./Pipelines";
+import {
+  groupCasesByBuiltFor,
+  normalizePipelineConversationComments,
+  pipelineBoardGroupByStorageKey,
+  readStoredPipelineBoardGroupBy,
+  writeStoredPipelineBoardGroupBy,
+} from "./Pipelines";
 
 describe("groupCasesByBuiltFor", () => {
   it("groups items by the parent case shown as Built for", () => {
@@ -58,6 +64,30 @@ describe("groupCasesByBuiltFor", () => {
         cases: [expect.objectContaining({ id: "standalone" })],
       },
     ]);
+  });
+});
+
+describe("pipeline board group preference", () => {
+  it("stores the selected grouping per pipeline", () => {
+    const values = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+    };
+
+    writeStoredPipelineBoardGroupBy("pipeline-1", "builtFor", storage);
+    writeStoredPipelineBoardGroupBy("pipeline-2", "none", storage);
+
+    expect(pipelineBoardGroupByStorageKey("pipeline-1")).toBe("paperclip.pipelineBoard.groupBy.pipeline-1");
+    expect(readStoredPipelineBoardGroupBy("pipeline-1", storage)).toBe("builtFor");
+    expect(readStoredPipelineBoardGroupBy("pipeline-2", storage)).toBe("none");
+    expect(readStoredPipelineBoardGroupBy("missing", storage)).toBe("none");
+  });
+
+  it("falls back to no grouping when storage is unavailable or contains stale values", () => {
+    expect(readStoredPipelineBoardGroupBy("pipeline-1", null)).toBe("none");
+    expect(readStoredPipelineBoardGroupBy("pipeline-1", { getItem: () => "stage" })).toBe("none");
+    expect(readStoredPipelineBoardGroupBy("pipeline-1", { getItem: () => { throw new Error("blocked"); } })).toBe("none");
   });
 });
 

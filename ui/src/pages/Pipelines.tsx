@@ -19,7 +19,7 @@ import type {
   RequestConfirmationInteraction,
   SuggestTasksInteraction,
 } from "@paperclipai/shared";
-import { AlertTriangle, ArrowUpDown, ArrowUpRight, BookOpenText, Check, ChevronDown, ChevronRight, ChevronUp, CircleDot, Download, ExternalLink, FileText, GitBranch, Hexagon, Image as ImageIcon, Info, List, ListTree, Loader2, MessageSquare, MoreHorizontal, Package, Paperclip, Plus, Search, Settings, Trash2, X } from "lucide-react";
+import { AlertTriangle, ArrowUpDown, ArrowUpRight, BookOpenText, Check, ChevronDown, ChevronRight, ChevronUp, CircleDot, Download, ExternalLink, FileText, GitBranch, Hexagon, Image as ImageIcon, Info, Layers, List, ListTree, Loader2, MessageSquare, MoreHorizontal, Package, Paperclip, Plus, Search, Settings, Trash2, X } from "lucide-react";
 import {
   DndContext,
   DragOverlay,
@@ -993,6 +993,7 @@ type PipelineTransitionEdge = { fromStageId: string; toStageId: string; label?: 
 type PipelineBoardGroupBy = "none" | "builtFor";
 
 const PIPELINE_BOARD_UNGROUPED_KEY = "__ungrouped";
+const PIPELINE_BOARD_GROUP_BY_STORAGE_PREFIX = "paperclip.pipelineBoard.groupBy.";
 
 function asText(value: unknown): string | null {
   if (typeof value !== "string") return null;
@@ -1119,6 +1120,43 @@ export function resolvePipelineTargetStageId(
 ) {
   if (columns.has(overId)) return overId;
   return caseToColumnId.get(overId) ?? null;
+}
+
+export function parsePipelineBoardGroupBy(value: unknown): PipelineBoardGroupBy {
+  return value === "builtFor" ? "builtFor" : "none";
+}
+
+export function pipelineBoardGroupByStorageKey(pipelineId: string) {
+  return `${PIPELINE_BOARD_GROUP_BY_STORAGE_PREFIX}${pipelineId}`;
+}
+
+function browserStorage() {
+  if (typeof window === "undefined") return null;
+  return window.localStorage;
+}
+
+export function readStoredPipelineBoardGroupBy(
+  pipelineId: string,
+  storage: Pick<Storage, "getItem"> | null = browserStorage(),
+) {
+  if (!storage) return "none";
+  try {
+    return parsePipelineBoardGroupBy(storage.getItem(pipelineBoardGroupByStorageKey(pipelineId)));
+  } catch {
+    return "none";
+  }
+}
+
+export function writeStoredPipelineBoardGroupBy(
+  pipelineId: string,
+  groupBy: PipelineBoardGroupBy,
+  storage: Pick<Storage, "setItem"> | null = browserStorage(),
+) {
+  try {
+    storage?.setItem(pipelineBoardGroupByStorageKey(pipelineId), groupBy);
+  } catch {
+    // Client-side preference only; storage failures should not block the board.
+  }
 }
 
 export function groupCasesByBuiltFor(cases: BoardCase[]) {
@@ -1345,7 +1383,10 @@ function PipelineBoard({ pipelineId }: { pipelineId: string }) {
   const navigate = useNavigate();
   const [activeCaseId, setActiveCaseId] = useState<string | null>(null);
   const [activeOverId, setActiveOverId] = useState<string | null>(null);
-  const [groupBy, setGroupBy] = useState<PipelineBoardGroupBy>("none");
+  const [groupByState, setGroupByState] = useState<{ pipelineId: string; value: PipelineBoardGroupBy }>(() => ({
+    pipelineId,
+    value: readStoredPipelineBoardGroupBy(pipelineId),
+  }));
   const [pendingMove, setPendingMove] = useState<{
     caseId: string;
     caseVersion: number;
@@ -1501,6 +1542,12 @@ function PipelineBoard({ pipelineId }: { pipelineId: string }) {
     },
     [guardrailsActive, transitions],
   );
+  const groupBy = groupByState.pipelineId === pipelineId ? groupByState.value : "none";
+  const handleGroupByChange = useCallback((value: string) => {
+    const next = parsePipelineBoardGroupBy(value);
+    writeStoredPipelineBoardGroupBy(pipelineId, next);
+    setGroupByState({ pipelineId, value: next });
+  }, [pipelineId]);
 
   const transitionCase = useMutation({
     mutationFn: ({
@@ -1592,6 +1639,10 @@ function PipelineBoard({ pipelineId }: { pipelineId: string }) {
     ]);
   }, [pipeline?.name, setBreadcrumbs]);
 
+  useEffect(() => {
+    setGroupByState({ pipelineId, value: readStoredPipelineBoardGroupBy(pipelineId) });
+  }, [pipelineId]);
+
   if (pipelineQuery.isLoading || casesQuery.isLoading) return <PageSkeleton />;
   if (!pipeline) {
     return <div className="mx-auto max-w-3xl py-10 text-sm text-muted-foreground">Pipeline not found.</div>;
@@ -1641,32 +1692,28 @@ function PipelineBoard({ pipelineId }: { pipelineId: string }) {
             </div>
           ) : null}
         </div>
-        <div className="flex shrink-0 flex-col items-stretch gap-2 sm:items-end">
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-medium text-muted-foreground">Group by</span>
-            <Select value={groupBy} onValueChange={(value) => setGroupBy(value as PipelineBoardGroupBy)}>
-              <SelectTrigger className="h-9 w-[140px]">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="none">None</SelectItem>
-                <SelectItem value="builtFor">Built for</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button asChild>
-              <Link to={`/pipelines/${pipelineId}/add`}>
-                <Plus className="mr-2 h-4 w-4" />
-                Add items
-              </Link>
-            </Button>
-            <Button variant="outline" size="icon" asChild>
-              <Link to={`/pipelines/${pipelineId}/settings`} aria-label="Pipeline settings" title="Pipeline settings">
-                <Settings className="h-4 w-4" />
-              </Link>
-            </Button>
-          </div>
+        <div className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end">
+          <Select value={groupBy} onValueChange={handleGroupByChange}>
+            <SelectTrigger className="h-9 w-[148px]" aria-label="Group by" title="Group by">
+              <Layers className="h-4 w-4 text-muted-foreground" />
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="none">None</SelectItem>
+              <SelectItem value="builtFor">Built for</SelectItem>
+            </SelectContent>
+          </Select>
+          <Button asChild>
+            <Link to={`/pipelines/${pipelineId}/add`}>
+              <Plus className="mr-2 h-4 w-4" />
+              Add items
+            </Link>
+          </Button>
+          <Button variant="outline" size="icon" asChild>
+            <Link to={`/pipelines/${pipelineId}/settings`} aria-label="Pipeline settings" title="Pipeline settings">
+              <Settings className="h-4 w-4" />
+            </Link>
+          </Button>
         </div>
       </div>
 
