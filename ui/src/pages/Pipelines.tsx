@@ -2616,8 +2616,11 @@ export function PipelineItemDetailView({ pipelineId, caseId }: { pipelineId: str
   const childRows = normalizePipelineChildRows(children.data);
   const eventRows = events.data?.items ?? [];
   const activeWork = detail.activeWork ?? null;
-  const conversationIssuePath = conversationIssue ? issueDetailPath(conversationIssue) : null;
-  const conversationIssueState = conversationIssue ? withIssueDetailHeaderSeed(null, conversationIssue) : undefined;
+  const conversationIssueForLink = activeConversationIssue ?? conversationIssue;
+  const conversationIssuePath = conversationIssueForLink ? issueDetailPath(conversationIssueForLink) : null;
+  const conversationIssueState = conversationIssueForLink
+    ? withIssueDetailHeaderSeed(null, conversationIssueForLink)
+    : undefined;
   const waitingChildren = getWaitingChildren(childRows);
   const childrenGate = hasChildrenGate(detail.stage);
   // "Break into pieces" rollup: the configured piece noun drives every count
@@ -2634,7 +2637,7 @@ export function PipelineItemDetailView({ pipelineId, caseId }: { pipelineId: str
   const primaryAction = conversationIssue
     ? (
         <Button asChild>
-          <Link to={conversationIssuePath!} state={conversationIssueState} issuePrefetch={conversationIssue}>
+          <Link to={conversationIssuePath!} state={conversationIssueState} issuePrefetch={conversationIssueDetail.data ?? null}>
             <MessageSquare className="mr-2 h-4 w-4" />
             Open conversation
           </Link>
