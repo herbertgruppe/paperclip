@@ -128,6 +128,10 @@ type PipelineConversationActionableInteraction =
   | RequestConfirmationInteraction
   | RequestCheckboxConfirmationInteraction;
 
+export function normalizePipelineConversationComments(value: unknown): IssueChatComment[] {
+  return Array.isArray(value) ? value : [];
+}
+
 interface DraftRow {
   id: string;
   expanded: boolean;
@@ -1910,13 +1914,14 @@ export function PipelineItemDetailView({ pipelineId, caseId }: { pipelineId: str
   const conversationCompanyId = activeConversationIssue?.companyId ?? selectedCompanyId ?? null;
   const [locallyQueuedConversationCommentRunIds, setLocallyQueuedConversationCommentRunIds] = useState<Map<string, string>>(() => new Map());
   const comments = useQuery({
-    queryKey: conversationIssueId ? queryKeys.issues.comments(conversationIssueId) : ["pipeline-item", caseId, "missing-conversation"],
+    queryKey: conversationIssueId ? queryKeys.issues.commentsList(conversationIssueId) : ["pipeline-item", caseId, "missing-conversation"],
     queryFn: () => issuesApi.listComments(conversationIssueId!, { order: "asc", limit: 50 }),
     enabled: Boolean(conversationIssueId),
-    placeholderData: conversationIssueId
-      ? keepPreviousDataForSameQueryTail<IssueChatComment[]>(conversationIssueId)
-      : undefined,
   });
+  const conversationComments = useMemo<IssueChatComment[]>(
+    () => normalizePipelineConversationComments(comments.data),
+    [comments.data],
+  );
   const { data: conversationActivity } = useQuery({
     queryKey: conversationIssueId ? queryKeys.issues.activity(conversationIssueId) : ["pipeline-item", caseId, "missing-conversation-activity"],
     queryFn: () => activityApi.forIssue(conversationIssueId!),
@@ -2051,10 +2056,10 @@ export function PipelineItemDetailView({ pipelineId, caseId }: { pipelineId: str
     () =>
       suggestedCommentAssigneeValue(
         starterAssigneeValue ? parseAssigneeValue(starterAssigneeValue) : activeConversationIssue ?? {},
-        comments.data ?? [],
+        conversationComments,
         currentUserId,
       ),
-    [activeConversationIssue, comments.data, currentUserId, starterAssigneeValue],
+    [activeConversationIssue, conversationComments, currentUserId, starterAssigneeValue],
   );
   const conversationRunningRun = useMemo(
     () => resolveRunningPipelineConversationRun(resolvedConversationActiveRun, resolvedConversationLiveRuns),
@@ -2110,7 +2115,7 @@ export function PipelineItemDetailView({ pipelineId, caseId }: { pipelineId: str
       }
     }
 
-    return (comments.data ?? []).map((comment) => {
+    return conversationComments.map((comment) => {
       const meta = runMetaByCommentId.get(comment.id);
       const nextComment: IssueChatComment = meta ? { ...comment, ...meta } : { ...comment };
       if (followUpCommentIds.has(comment.id)) {
@@ -2146,7 +2151,7 @@ export function PipelineItemDetailView({ pipelineId, caseId }: { pipelineId: str
       return nextComment;
     });
   }, [
-    comments.data,
+    conversationComments,
     conversationActivity,
     conversationLinkedRuns,
     conversationLiveRunIds,
