@@ -241,6 +241,27 @@ function stageAutomationRoutineId(config: unknown) {
   return record.type === "run_routine" && typeof record.routineId === "string" ? record.routineId : null;
 }
 
+function readAutomationContextValue(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function stageAutomationContext(config: Record<string, unknown>) {
+  const onEnter = config.onEnter;
+  const record = onEnter && typeof onEnter === "object" && !Array.isArray(onEnter)
+    ? onEnter as Record<string, unknown>
+    : {};
+  return {
+    projectId: readAutomationContextValue(record.projectId),
+    projectWorkspaceId: readAutomationContextValue(record.projectWorkspaceId),
+    executionWorkspaceId: readAutomationContextValue(record.executionWorkspaceId),
+    executionWorkspacePreference: readAutomationContextValue(record.executionWorkspacePreference),
+    executionWorkspaceSettings:
+      record.executionWorkspaceSettings && typeof record.executionWorkspaceSettings === "object" && !Array.isArray(record.executionWorkspaceSettings)
+        ? record.executionWorkspaceSettings
+        : null,
+  };
+}
+
 function withDerivedStageAutomation(
   stage: typeof pipelineStages.$inferSelect,
   routineById: Map<string, {
@@ -265,6 +286,7 @@ function withDerivedStageAutomation(
         routineId,
         assigneeAgentId: routine.assigneeAgentId,
         instructionsBody: routine.description ?? "",
+        ...stageAutomationContext(config),
         env: routine.env ?? null,
         latestRoutineRevisionId: routine.latestRevisionId,
         latestRoutineRevisionNumber: routine.latestRevisionNumber,

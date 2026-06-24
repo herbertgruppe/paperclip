@@ -1,4 +1,8 @@
 import { z } from "zod";
+import {
+  ISSUE_EXECUTION_WORKSPACE_PREFERENCES,
+  issueExecutionWorkspaceSettingsSchema,
+} from "./issue.js";
 
 const routineVariableLikeNameSchema = z.string().trim().regex(/^[A-Za-z][A-Za-z0-9_]*$/);
 
@@ -22,6 +26,22 @@ export const pipelineStageOnEnterSchema = z.object({
   type: z.literal("run_routine"),
   routineId: z.string().uuid(),
   id: z.string().trim().min(1).max(200).optional(),
+  projectId: z.string().uuid().optional().nullable(),
+  projectWorkspaceId: z.string().uuid().optional().nullable(),
+  executionWorkspaceId: z.string().uuid().optional().nullable(),
+  executionWorkspacePreference: z.enum(ISSUE_EXECUTION_WORKSPACE_PREFERENCES).optional().nullable(),
+  executionWorkspaceSettings: issueExecutionWorkspaceSettingsSchema.optional().nullable(),
+}).passthrough();
+
+export const pipelineStageAutomationSchema = z.object({
+  routineId: z.string().uuid().optional().nullable(),
+  assigneeAgentId: z.string().uuid().optional().nullable(),
+  instructionsBody: z.string().optional().nullable(),
+  projectId: z.string().uuid().optional().nullable(),
+  projectWorkspaceId: z.string().uuid().optional().nullable(),
+  executionWorkspaceId: z.string().uuid().optional().nullable(),
+  executionWorkspacePreference: z.enum(ISSUE_EXECUTION_WORKSPACE_PREFERENCES).optional().nullable(),
+  executionWorkspaceSettings: issueExecutionWorkspaceSettingsSchema.optional().nullable(),
 }).passthrough();
 
 export const pipelineStageCarryOverPolicySchema = z.object({
@@ -84,6 +104,7 @@ export const pipelineStageConfigSchema = z.object({
   reviewerKind: z.enum(["human", "any"]).optional(),
   whatHappensHere: z.string().trim().max(10_000).optional(),
   onEnter: pipelineStageOnEnterSchema.optional(),
+  automation: pipelineStageAutomationSchema.optional(),
   breakdown: pipelineStageBreakdownSchema.optional(),
   approveToStageKey: z.string().trim().min(1).max(120).optional(),
   rejectToStageKey: z.string().trim().min(1).max(120).optional(),
@@ -127,6 +148,7 @@ export const pipelineAutomationRetryRequestSchema = z.object({
 export type PipelineStageKind = z.infer<typeof pipelineStageKindSchema>;
 export type PipelineStageApprover = z.infer<typeof pipelineStageApproverSchema>;
 export type PipelineStageOnEnter = z.infer<typeof pipelineStageOnEnterSchema>;
+export type PipelineStageAutomationConfig = z.infer<typeof pipelineStageAutomationSchema>;
 export type PipelineStageCarryOverPolicy = z.infer<typeof pipelineStageCarryOverPolicySchema>;
 export type PipelineStageBreakdown = z.infer<typeof pipelineStageBreakdownSchema>;
 export type PipelineStageVariable = z.infer<typeof pipelineStageVariableSchema>;

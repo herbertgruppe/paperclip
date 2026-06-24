@@ -34,6 +34,8 @@ import {
   type PipelineCaseConversationSourceKind,
   type PipelineCaseConversationSourceLinkRole,
   type PipelineCaseConversationSourceReason,
+  type ExecutionWorkspaceMode,
+  type IssueExecutionWorkspaceSettings,
   type PipelineStageAutomation,
   PIPELINE_CASE_BODY_DOCUMENT_KEY,
   type RoutineVariable,
@@ -123,6 +125,11 @@ export type PipelineStageConfig = Record<string, unknown> & {
     routineId?: string | null;
     assigneeAgentId?: string | null;
     instructionsBody?: string | null;
+    projectId?: string | null;
+    projectWorkspaceId?: string | null;
+    executionWorkspaceId?: string | null;
+    executionWorkspacePreference?: ExecutionWorkspaceMode | null;
+    executionWorkspaceSettings?: IssueExecutionWorkspaceSettings | null;
     env?: Record<string, EnvBinding> | null;
     latestRoutineRevisionId?: string | null;
     latestRoutineRevisionNumber?: number;
@@ -141,6 +148,11 @@ export type PipelineStageConfig = Record<string, unknown> & {
     type?: "run_routine";
     routineId?: string;
     id?: string;
+    projectId?: string | null;
+    projectWorkspaceId?: string | null;
+    executionWorkspaceId?: string | null;
+    executionWorkspacePreference?: ExecutionWorkspaceMode | null;
+    executionWorkspaceSettings?: IssueExecutionWorkspaceSettings | null;
   };
 };
 
@@ -156,6 +168,14 @@ type PipelineDb = Db | Parameters<Parameters<Db["transaction"]>[0]>[0];
 type PipelineRetryPlanInternal = PipelineAutomationRetryPlan & {
   targetStageRow: typeof pipelineStages.$inferSelect | null;
   automationRoutineId: string | null;
+};
+
+type PipelineAutomationExecutionContext = {
+  projectId: string | null;
+  projectWorkspaceId: string | null;
+  executionWorkspaceId: string | null;
+  executionWorkspacePreference: ExecutionWorkspaceMode | null;
+  executionWorkspaceSettings: IssueExecutionWorkspaceSettings | null;
 };
 
 export interface ResolvedPipelineCaseConversationSource {
@@ -759,16 +779,54 @@ function childrenGateConfig(
   };
 }
 
+function readOptionalTrimmedString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function readExecutionWorkspacePreference(value: unknown): ExecutionWorkspaceMode | null {
+  const preference = readOptionalTrimmedString(value);
+  switch (preference) {
+    case "inherit":
+    case "shared_workspace":
+    case "isolated_workspace":
+    case "operator_branch":
+    case "reuse_existing":
+    case "agent_default":
+      return preference;
+    default:
+      return null;
+  }
+}
+
+function readExecutionWorkspaceSettings(value: unknown): IssueExecutionWorkspaceSettings | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as IssueExecutionWorkspaceSettings
+    : null;
+}
+
+function readAutomationExecutionContext(
+  source?: Partial<PipelineAutomationExecutionContext> | null,
+): PipelineAutomationExecutionContext {
+  return {
+    projectId: readOptionalTrimmedString(source?.projectId),
+    projectWorkspaceId: readOptionalTrimmedString(source?.projectWorkspaceId),
+    executionWorkspaceId: readOptionalTrimmedString(source?.executionWorkspaceId),
+    executionWorkspacePreference: readExecutionWorkspacePreference(source?.executionWorkspacePreference),
+    executionWorkspaceSettings: readExecutionWorkspaceSettings(source?.executionWorkspaceSettings),
+  };
+}
+
 function readStageAutomationRequest(config?: PipelineStageConfig | null) {
   const automation = config?.automation;
   if (!automation || typeof automation !== "object" || Array.isArray(automation)) return null;
-  const assigneeAgentId =
-    typeof automation.assigneeAgentId === "string" && automation.assigneeAgentId.trim()
-      ? automation.assigneeAgentId.trim()
-      : null;
+  const assigneeAgentId = readOptionalTrimmedString(automation.assigneeAgentId);
   const instructionsBody =
     typeof automation.instructionsBody === "string" ? automation.instructionsBody : "";
-  return { assigneeAgentId, instructionsBody };
+  return {
+    assigneeAgentId,
+    instructionsBody,
+    executionContext: readAutomationExecutionContext(automation),
+  };
 }
 
 function persistedStageConfig(config?: PipelineStageConfig | null): PipelineStageConfig {
@@ -1016,6 +1074,7 @@ function stageAutomation(stage: typeof pipelineStages.$inferSelect) {
   return {
     id: onEnter.id ?? `${stage.id}:on_enter`,
     routineId: onEnter.routineId,
+    ...readAutomationExecutionContext(onEnter),
   };
 }
 
@@ -1031,11 +1090,15 @@ function defaultRetryCleanup(): PipelineAutomationRetryCleanupOptions {
   };
 }
 
-function derivedStageAutomationPayload(routine: typeof routines.$inferSelect): PipelineStageAutomation {
+function derivedStageAutomationPayload(
+  routine: typeof routines.$inferSelect,
+  executionContext: PipelineAutomationExecutionContext = readAutomationExecutionContext(),
+): PipelineStageAutomation {
   return {
     routineId: routine.id,
     assigneeAgentId: routine.assigneeAgentId,
     instructionsBody: routine.description ?? "",
+    ...executionContext,
     env: routine.env ?? null,
     latestRoutineRevisionId: routine.latestRevisionId,
     latestRoutineRevisionNumber: routine.latestRevisionNumber,
@@ -2606,6 +2669,7 @@ export function pipelineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeu
       config: PipelineStageConfig;
       assigneeAgentId: string | null;
       instructionsBody: string;
+      executionContext: PipelineAutomationExecutionContext;
       actor: PipelineActor;
     },
   ): Promise<PipelineStageConfig> {
@@ -2661,7 +2725,11 @@ export function pipelineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeu
       );
       return {
         ...input.config,
-        onEnter: { type: "run_routine" as const, routineId: revised.id },
+        onEnter: {
+          type: "run_routine" as const,
+          routineId: revised.id,
+          ...input.executionContext,
+        },
       };
     }
 
@@ -2696,7 +2764,11 @@ export function pipelineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeu
     );
     return {
       ...input.config,
-      onEnter: { type: "run_routine" as const, routineId: revised.id },
+      onEnter: {
+        type: "run_routine" as const,
+        routineId: revised.id,
+        ...input.executionContext,
+      },
     };
   }
 
@@ -2849,6 +2921,11 @@ export function pipelineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeu
         source: "api",
         assigneeAgentId: routine.assigneeAgentId,
         idempotencyKey: `pipeline:${execution.caseId}:${execution.automationId}:${execution.triggeringEventId}`,
+        projectId: automation.projectId,
+        projectWorkspaceId: automation.projectWorkspaceId,
+        executionWorkspaceId: automation.executionWorkspaceId,
+        executionWorkspacePreference: automation.executionWorkspacePreference,
+        executionWorkspaceSettings: automation.executionWorkspaceSettings,
         payload: {
           pipeline: contextPack.pipeline,
           case: contextPack.case,
@@ -3509,6 +3586,7 @@ export function pipelineService(db: Db, deps: { heartbeat?: IssueAssignmentWakeu
               config,
               assigneeAgentId: automationRequest.assigneeAgentId,
               instructionsBody: automationRequest.instructionsBody,
+              executionContext: automationRequest.executionContext,
               actor: input.actor ?? { type: "system" },
             })
           : config;

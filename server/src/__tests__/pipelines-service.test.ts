@@ -6,7 +6,9 @@ import {
   agents,
   companies,
   createDb,
+  executionWorkspaces,
   heartbeatRuns,
+  instanceSettings,
   issueComments,
   issues,
   pipelineAutomationExecutions,
@@ -17,6 +19,8 @@ import {
   pipelineStages,
   pipelineTransitions,
   pipelines,
+  projectWorkspaces,
+  projects,
   routineRuns,
   routines,
 } from "@paperclipai/db";
@@ -26,6 +30,7 @@ import {
 } from "./helpers/embedded-postgres.js";
 import { pipelineService, type PipelineActor } from "../services/pipelines.ts";
 import { routineService } from "../services/routines.ts";
+import { instanceSettingsService } from "../services/instance-settings.ts";
 
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
@@ -64,9 +69,13 @@ describeEmbeddedPostgres("pipelineService", () => {
     await db.delete(routineRuns);
     await db.delete(heartbeatRuns);
     await db.delete(issues);
+    await db.delete(executionWorkspaces);
     await db.delete(routines);
+    await db.delete(projectWorkspaces);
+    await db.delete(projects);
     await db.delete(agents);
     await db.delete(companies);
+    await db.delete(instanceSettings);
   });
 
   afterAll(async () => {
@@ -1177,6 +1186,107 @@ describeEmbeddedPostgres("pipelineService", () => {
       .from(pipelineCaseIssueLinks)
       .where(eq(pipelineCaseIssueLinks.issueId, crashExecutions[0]!.executionIssueId!));
     expect(crashLinks).toHaveLength(1);
+  });
+
+  it("carries saved stage automation workspace context into the execution issue", async () => {
+    const { company, pipeline, byKey } = await seedPipeline();
+    const routineSeed = await seedRoutine(company.id, "Workspace automation seed");
+    const projectId = randomUUID();
+    const projectWorkspaceId = randomUUID();
+    const executionWorkspaceId = randomUUID();
+
+    await instanceSettingsService(db).updateExperimental({ enableIsolatedWorkspaces: true });
+    await db.insert(projects).values({
+      id: projectId,
+      companyId: company.id,
+      name: "Automation project",
+      status: "in_progress",
+    });
+    await db.insert(projectWorkspaces).values({
+      id: projectWorkspaceId,
+      companyId: company.id,
+      projectId,
+      name: "Automation workspace",
+      isPrimary: true,
+      sharedWorkspaceKey: "pipeline-automation-primary",
+    });
+    await db.insert(executionWorkspaces).values({
+      id: executionWorkspaceId,
+      companyId: company.id,
+      projectId,
+      projectWorkspaceId,
+      mode: "isolated_workspace",
+      strategyType: "git_worktree",
+      name: "Automation worktree",
+      status: "active",
+      providerType: "git_worktree",
+    });
+
+    const updatedStage = await svc.updateStage({
+      companyId: company.id,
+      pipelineId: pipeline.id,
+      stageId: byKey.get("in_progress")!.id,
+      patch: {
+        config: {
+          automation: {
+            assigneeAgentId: routineSeed.assigneeAgentId,
+            instructionsBody: "Use the selected workspace.",
+            projectId,
+            projectWorkspaceId,
+            executionWorkspaceId,
+            executionWorkspacePreference: "reuse_existing",
+            executionWorkspaceSettings: { mode: "isolated_workspace" },
+          },
+        },
+      },
+      actor: userActor,
+    });
+    expect((updatedStage.config as { onEnter?: unknown }).onEnter).toMatchObject({
+      type: "run_routine",
+      projectId,
+      projectWorkspaceId,
+      executionWorkspaceId,
+      executionWorkspacePreference: "reuse_existing",
+      executionWorkspaceSettings: { mode: "isolated_workspace" },
+    });
+
+    const created = await svc.ingestCase({
+      companyId: company.id,
+      pipelineId: pipeline.id,
+      caseKey: "workspace-context",
+      title: "Workspace context case",
+      actor: userActor,
+    });
+    const moved = await svc.transitionCase({
+      companyId: company.id,
+      caseId: created.case.id,
+      toStageKey: "in_progress",
+      expectedVersion: 1,
+      actor: userActor,
+    });
+
+    expect(moved.automationExecution.status).toBe("succeeded");
+    const executionIssueId = moved.automationExecution.status === "succeeded"
+      ? moved.automationExecution.execution.executionIssueId
+      : null;
+    const [issue] = await db
+      .select({
+        projectId: issues.projectId,
+        projectWorkspaceId: issues.projectWorkspaceId,
+        executionWorkspaceId: issues.executionWorkspaceId,
+        executionWorkspacePreference: issues.executionWorkspacePreference,
+        executionWorkspaceSettings: issues.executionWorkspaceSettings,
+      })
+      .from(issues)
+      .where(eq(issues.id, executionIssueId!));
+
+    expect(issue).toEqual({
+      projectId,
+      projectWorkspaceId,
+      executionWorkspaceId,
+      executionWorkspacePreference: "reuse_existing",
+      executionWorkspaceSettings: { mode: "isolated_workspace" },
+    });
   });
 
   it("rejects cross-company stage automation routines at save and execution", async () => {

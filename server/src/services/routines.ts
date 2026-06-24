@@ -389,6 +389,7 @@ function normalizeRoutineDispatchFingerprintValue(value: unknown): unknown {
 function createRoutineDispatchFingerprint(input: {
   payload: Record<string, unknown> | null;
   projectId: string | null;
+  projectWorkspaceId: string | null;
   assigneeAgentId: string | null;
   routineRevisionId: string | null;
   routineEnvFingerprint: string | null;
@@ -1377,6 +1378,7 @@ export function routineService(
     payload?: Record<string, unknown> | null;
     variables?: Record<string, unknown> | null;
     projectId?: string | null;
+    projectWorkspaceId?: string | null;
     assigneeAgentId?: string | null;
     idempotencyKey?: string | null;
     executionWorkspaceId?: string | null;
@@ -1386,6 +1388,7 @@ export function routineService(
     actor?: Actor;
   }) {
     const projectId = input.projectId ?? input.routine.projectId ?? null;
+    const projectWorkspaceId = input.projectWorkspaceId ?? null;
     const assigneeAgentId = input.assigneeAgentId ?? input.routine.assigneeAgentId ?? null;
     if (!assigneeAgentId) {
       throw unprocessable("Default agent required");
@@ -1432,6 +1435,7 @@ export function routineService(
     const dispatchFingerprint = createRoutineDispatchFingerprint({
       payload: triggerPayload,
       projectId,
+      projectWorkspaceId,
       assigneeAgentId,
       routineRevisionId: input.routine.latestRevisionId,
       routineEnvFingerprint: createRoutineEnvFingerprint(input.routine.env),
@@ -1524,6 +1528,7 @@ export function routineService(
         try {
           createdIssue = await issueSvc.create(input.routine.companyId, {
             projectId,
+            projectWorkspaceId,
             goalId: input.routine.goalId,
             parentId: input.routine.parentIssueId,
             title,
@@ -2429,6 +2434,7 @@ export function routineService(
         payload: input.payload as Record<string, unknown> | null | undefined,
         variables: input.variables as Record<string, unknown> | null | undefined,
         projectId: input.projectId ?? null,
+        projectWorkspaceId: input.projectWorkspaceId ?? null,
         assigneeAgentId: input.assigneeAgentId ?? null,
         idempotencyKey: input.idempotencyKey,
         executionWorkspaceId: input.executionWorkspaceId ?? null,
@@ -2453,6 +2459,7 @@ export function routineService(
         payload: input.payload as Record<string, unknown> | null | undefined,
         variables: input.variables as Record<string, unknown> | null | undefined,
         projectId: input.projectId ?? null,
+        projectWorkspaceId: input.projectWorkspaceId ?? null,
         assigneeAgentId: input.assigneeAgentId ?? null,
         idempotencyKey: input.idempotencyKey,
         executionWorkspaceId: input.executionWorkspaceId ?? null,

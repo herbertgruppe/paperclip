@@ -1262,6 +1262,7 @@ export {
   pipelineAutomationRetryCleanupOptionsSchema,
   pipelineAutomationRetryRequestSchema,
   pipelineAutomationRetryScopeSchema,
+  pipelineStageAutomationSchema,
   pipelineStageApproverSchema,
   pipelineStageConfigSchema,
   pipelineStageKindSchema,
