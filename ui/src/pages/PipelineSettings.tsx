@@ -186,6 +186,19 @@ const STAGE_SECTION_TITLES: Record<StageSectionKey, string> = {
   advanced: "Advanced",
 };
 
+function parseStageSectionKey(value: string | null): StageSectionKey | null {
+  switch (value) {
+    case "instructions":
+    case "advanced":
+    case "secrets":
+    case "activity":
+    case "history":
+      return value;
+    default:
+      return null;
+  }
+}
+
 const STAGE_KIND_OPTIONS: Array<{
   value: EditableStageKind;
   label: string;
@@ -1542,6 +1555,7 @@ export function PipelineSettings() {
   // Deep-link from a board-header health warning: ?stage=<id> preselects the
   // flagged stage so the warning's "fix" lands on the right panel.
   const requestedStageId = searchParams.get("stage");
+  const requestedStageSection = parseStageSectionKey(searchParams.get("section"));
   useEffect(() => {
     if (requestedStageId && stages.some((stage) => stage.id === requestedStageId)) {
       setSelectedStageId(requestedStageId);
@@ -1602,13 +1616,23 @@ export function PipelineSettings() {
 
   useEffect(() => {
     if (!selectedStage) return;
-    const sectionAvailable = stageNavGroups(selectedStage.kind).some((group) =>
+    const requestedSectionAvailable = requestedStageSection
+      ? stageNavGroups(selectedStage.kind).some((group) =>
+          group.items.some((item) => item.id === requestedStageSection),
+        )
+      : false;
+    if (requestedStageSection && requestedSectionAvailable) {
+      setActiveStageSection(requestedStageSection);
+      return;
+    }
+
+    const activeSectionAvailable = stageNavGroups(selectedStage.kind).some((group) =>
       group.items.some((item) => item.id === activeStageSection),
     );
-    if (!sectionAvailable) {
+    if (!activeSectionAvailable) {
       setActiveStageSection("instructions");
     }
-  }, [activeStageSection, selectedStage]);
+  }, [activeStageSection, requestedStageSection, selectedStage]);
 
   // Instructions body + variables hydrate from the per-stage document (or the
   // legacy field). Resetting on the saved value clears dirty after save/reload.

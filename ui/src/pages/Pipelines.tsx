@@ -132,6 +132,53 @@ type PipelineConversationActionableInteraction =
 
 type PipelineBoardAutomationAgent = Pick<Agent, "id" | "name" | "icon" | "urlKey">;
 
+const defaultPipelineStageColumnTone = {
+  outer: "border-border bg-background",
+  header: "border-border text-muted-foreground",
+  meta: "border-border",
+  body: "",
+  bodyOver: "bg-accent/40",
+};
+
+export const pipelineStageColumnTones: Record<string, typeof defaultPipelineStageColumnTone> = {
+  review: {
+    outer: "border-violet-500/25 bg-violet-50/50 dark:bg-violet-950/15",
+    header: "border-violet-500/15 text-violet-700 dark:text-violet-300",
+    meta: "border-violet-500/15",
+    body: "bg-violet-50/30 dark:bg-violet-950/10",
+    bodyOver: "bg-violet-100/65 dark:bg-violet-950/30",
+  },
+  in_review: {
+    outer: "border-violet-500/25 bg-violet-50/50 dark:bg-violet-950/15",
+    header: "border-violet-500/15 text-violet-700 dark:text-violet-300",
+    meta: "border-violet-500/15",
+    body: "bg-violet-50/30 dark:bg-violet-950/10",
+    bodyOver: "bg-violet-100/65 dark:bg-violet-950/30",
+  },
+  done: {
+    outer: "border-green-500/25 bg-green-50/50 dark:bg-green-950/15",
+    header: "border-green-500/15 text-green-700 dark:text-green-300",
+    meta: "border-green-500/15",
+    body: "bg-green-50/30 dark:bg-green-950/10",
+    bodyOver: "bg-green-100/65 dark:bg-green-950/30",
+  },
+  cancelled: {
+    outer: "border-neutral-300/70 bg-muted/25 opacity-85 dark:border-neutral-700/70 dark:bg-neutral-900/20",
+    header: "border-border/70 text-muted-foreground/80",
+    meta: "border-border/70",
+    body: "bg-muted/20",
+    bodyOver: "bg-muted/45",
+  },
+};
+
+export function getPipelineStageColumnTone(kind: string | null | undefined) {
+  return pipelineStageColumnTones[kind?.trim().toLowerCase() ?? ""] ?? defaultPipelineStageColumnTone;
+}
+
+export function pipelineStageAutomationSettingsHref(pipelineId: string, stageId: string) {
+  return `/pipelines/${pipelineId}/settings?stage=${stageId}&section=instructions`;
+}
+
 export function normalizePipelineConversationComments(value: unknown): IssueChatComment[] {
   return Array.isArray(value) ? value : [];
 }
@@ -1292,6 +1339,7 @@ function PipelineBoardColumn({
   warningCount,
   breakdownTarget,
   automationAgent,
+  automationHref,
   onColumnEmpty,
   isDragTargeted,
   isDragBlocked,
@@ -1303,12 +1351,14 @@ function PipelineBoardColumn({
   warningCount?: number;
   breakdownTarget?: { pipelineId: string; name: string } | null;
   automationAgent?: PipelineBoardAutomationAgent | null;
+  automationHref?: string | null;
   onColumnEmpty?: (stage: PipelineStage) => string;
   isDragTargeted?: boolean;
   isDragBlocked?: boolean;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: stage.id });
 
+  const tone = getPipelineStageColumnTone(stage.kind);
   const isBlockedDropTarget = !!isDragTargeted && !!isDragBlocked;
   const caseGroups = groupBy === "builtFor"
     ? groupCasesByBuiltFor(cases)
@@ -1319,9 +1369,13 @@ function PipelineBoardColumn({
     <div
       key={stage.id}
       aria-label={`${stage.name} column`}
-      className={`flex min-w-[260px] max-w-[320px] shrink-0 flex-col rounded-md border border-border ${isBlockedDropTarget ? "ring-1 ring-red-500/45" : ""}`}
+      className={cn(
+        "flex min-w-[260px] max-w-[320px] shrink-0 flex-col rounded-md border",
+        tone.outer,
+        isBlockedDropTarget && "ring-1 ring-red-500/45",
+      )}
     >
-      <div className="group/stage-header flex items-center justify-between border-b border-border px-3 py-2 text-sm font-semibold text-muted-foreground">
+      <div className={cn("group/stage-header flex items-center justify-between border-b px-3 py-2 text-sm font-semibold", tone.header)}>
         <div className="flex min-w-0 items-center gap-1">
           <span className="min-w-0 truncate">{stage.name}</span>
           {settingsHref ? (
@@ -1346,12 +1400,12 @@ function PipelineBoardColumn({
         </span>
       </div>
       {breakdownTarget || automationAgent ? (
-        <div className="flex flex-wrap items-center gap-1.5 border-b border-border px-3 py-1.5">
-          {automationAgent ? (
+        <div className={cn("flex flex-wrap items-center gap-1.5 border-b px-3 py-1.5", tone.meta)}>
+          {automationAgent && automationHref ? (
             <Link
-              to={`/agents/${automationAgent.urlKey || automationAgent.id}`}
+              to={automationHref}
               className="inline-flex max-w-full items-center gap-1 rounded-full border border-border px-2 py-0.5 text-xs font-medium text-muted-foreground hover:text-foreground"
-              title={`${automationAgent.name} runs this step`}
+              title={`Edit ${stage.name} automation`}
             >
               <AgentIcon icon={automationAgent.icon} className="h-3.5 w-3.5 shrink-0" />
               <span className="truncate">{automationAgent.name}</span>
@@ -1371,9 +1425,10 @@ function PipelineBoardColumn({
       ) : null}
       <div
         ref={setNodeRef}
-        className={`min-h-[160px] flex-1 space-y-2 rounded-b-md px-2 py-2 transition-colors ${
-          isBlockedDropTarget ? "bg-red-50 dark:bg-red-950/30" : isOver ? "bg-accent/40" : ""
-        }`}
+        className={cn(
+          "min-h-[160px] flex-1 space-y-2 rounded-b-md px-2 py-2 transition-colors",
+          isBlockedDropTarget ? "bg-red-50 dark:bg-red-950/30" : isOver ? tone.bodyOver : tone.body,
+        )}
       >
         {isBlockedDropTarget ? (
           <p className="rounded border border-red-200 bg-red-50 px-3 py-2 text-[11px] text-red-700 dark:border-red-500/30 dark:bg-red-500/10 dark:text-red-200">
@@ -1807,6 +1862,9 @@ function PipelineBoard({ pipelineId }: { pipelineId: string }) {
                   warningCount={healthWarningsByStage[stage.id]?.length ?? 0}
                   breakdownTarget={breakdownTargetByStageId.get(stage.id) ?? null}
                   automationAgent={automationAgent}
+                  automationHref={
+                    stage.id === UNASSIGNED_STAGE_ID ? null : pipelineStageAutomationSettingsHref(pipelineId, stage.id)
+                  }
                   isDragTargeted={isDragTargeted}
                   isDragBlocked={isDragBlocked}
                   onColumnEmpty={(columnStage) =>

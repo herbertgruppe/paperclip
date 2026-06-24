@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { queryKeys } from "../lib/queryKeys";
 import {
+  getPipelineStageColumnTone,
   groupCasesByBuiltFor,
   normalizePipelineConversationComments,
+  pipelineStageAutomationSettingsHref,
   pipelineBoardGroupByStorageKey,
   readStoredPipelineBoardGroupBy,
   readPipelineStageAutomationAssigneeAgentId,
@@ -114,6 +116,23 @@ describe("readPipelineStageAutomationAssigneeAgentId", () => {
   it("ignores stages without an agent automation assignee", () => {
     expect(readPipelineStageAutomationAssigneeAgentId({ config: null })).toBeNull();
     expect(readPipelineStageAutomationAssigneeAgentId({ config: { automation: { assigneeAgentId: " " } } })).toBeNull();
+  });
+});
+
+describe("pipeline stage board presentation", () => {
+  it("links automation chips to the stage automation settings section", () => {
+    expect(pipelineStageAutomationSettingsHref("pipeline-1", "stage-1")).toBe(
+      "/pipelines/pipeline-1/settings?stage=stage-1&section=instructions",
+    );
+  });
+
+  it("uses type-aware column outlines and backgrounds", () => {
+    expect(getPipelineStageColumnTone("working").outer).toContain("border-border");
+    expect(getPipelineStageColumnTone("review").outer).toContain("violet");
+    expect(getPipelineStageColumnTone("in_review").body).toContain("violet");
+    expect(getPipelineStageColumnTone("done").outer).toContain("green");
+    expect(getPipelineStageColumnTone("cancelled").outer).toContain("bg-muted/25");
+    expect(getPipelineStageColumnTone("cancelled").outer).toContain("opacity-85");
   });
 });
 
