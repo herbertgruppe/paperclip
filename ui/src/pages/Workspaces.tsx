@@ -11,6 +11,7 @@ import { useBreadcrumbs } from "../context/BreadcrumbContext";
 import { useCompany } from "../context/CompanyContext";
 import type { ProjectWorkspaceSummary } from "../lib/project-workspaces-tab";
 import { queryKeys } from "../lib/queryKeys";
+import { projectRouteRef } from "../lib/utils";
 
 type ProjectWorkspaceGroup = {
   projectId: string;
@@ -59,7 +60,7 @@ function buildProjectWorkspaceGroups(items: WorkspaceOverviewItem[]): ProjectWor
     groups.set(item.projectId, {
       projectId: item.projectId,
       projectName: item.projectName,
-      projectRef: item.projectId,
+      projectRef: projectRouteRef({ id: item.projectId, name: item.projectName, urlKey: item.projectUrlKey }),
       summaries: [summary],
       lastUpdatedAt: summary.lastUpdatedAt,
       runningServiceCount: summary.runningServiceCount,

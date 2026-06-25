@@ -20,7 +20,7 @@ import type {
   WorkspaceOverviewPrimaryService,
   WorkspaceOverviewQuery,
 } from "@paperclipai/shared";
-import { WORKSPACE_OVERVIEW_LINKED_ISSUE_LIMIT } from "@paperclipai/shared";
+import { deriveProjectUrlKey, WORKSPACE_OVERVIEW_LINKED_ISSUE_LIMIT } from "@paperclipai/shared";
 import { parseProjectExecutionWorkspacePolicy } from "./execution-workspace-policy.js";
 import { readProjectWorkspaceRuntimeConfig } from "./project-workspace-runtime-config.js";
 import {
@@ -497,6 +497,13 @@ export function executionWorkspaceService(db: Db) {
         db
           .select({ count: sql<number>`count(*)::int` })
           .from(executionWorkspaces)
+          .innerJoin(
+            projects,
+            and(
+              eq(projects.id, executionWorkspaces.projectId),
+              eq(projects.companyId, companyId),
+            ),
+          )
           .where(whereClause)
           .then((result) => result[0] ?? { count: 0 }),
         db
@@ -650,6 +657,7 @@ export function executionWorkspaceService(db: Db) {
           workspaceId: row.id,
           workspaceName: row.name,
           projectId: row.projectId,
+          projectUrlKey: deriveProjectUrlKey(row.projectName, row.projectId),
           projectName: row.projectName,
           mode: row.mode as WorkspaceOverviewItem["mode"],
           strategyType: row.strategyType as WorkspaceOverviewItem["strategyType"],

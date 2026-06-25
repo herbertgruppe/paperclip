@@ -203,6 +203,7 @@ export interface WorkspaceOverviewItem {
   workspaceId: string;
   workspaceName: string;
   projectId: string;
+  projectUrlKey: string;
   projectName: string;
   mode: ExecutionWorkspaceSummary["mode"];
   strategyType: ExecutionWorkspaceStrategyType;

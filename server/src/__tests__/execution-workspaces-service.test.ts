@@ -430,6 +430,7 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
     const workspaceBId = "22222222-2222-4222-8222-222222222222";
     const archivedWorkspaceId = "33333333-3333-4333-8333-333333333333";
     const otherWorkspaceId = "44444444-4444-4444-8444-444444444444";
+    const crossCompanyProjectWorkspaceId = "55555555-5555-4555-8555-555555555555";
 
     await db.insert(companies).values([
       {
@@ -528,6 +529,18 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
         cwd: "/tmp/workspace-other",
         lastUsedAt: new Date("2026-06-05T10:00:00.000Z"),
       },
+      {
+        id: crossCompanyProjectWorkspaceId,
+        companyId,
+        projectId: otherProject,
+        mode: "isolated_workspace",
+        strategyType: "git_worktree",
+        name: "Cross-company project mismatch",
+        status: "active",
+        providerType: "git_worktree",
+        cwd: "/tmp/workspace-cross-company-project",
+        lastUsedAt: new Date("2026-06-06T10:00:00.000Z"),
+      },
     ]);
     await db.insert(workspaceRuntimeServices).values([
       {
@@ -597,6 +610,7 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
     expect(overview.items.map((item) => item.workspaceId)).toEqual([workspaceAId, workspaceBId]);
     expect(overview.items.map((item) => item.workspaceId)).not.toContain(archivedWorkspaceId);
     expect(overview.items.map((item) => item.workspaceId)).not.toContain(otherWorkspaceId);
+    expect(overview.items.map((item) => item.workspaceId)).not.toContain(crossCompanyProjectWorkspaceId);
     expect(overview.hasMore).toBe(false);
 
     const activeA = overview.items[0]!;
@@ -605,6 +619,7 @@ describeEmbeddedPostgres("executionWorkspaceService.getCloseReadiness", () => {
       kind: "execution_workspace",
       workspaceName: "Active A",
       projectId,
+      projectUrlKey: "workspaces",
       projectName: "Workspaces",
       branchName: "paperclip/a",
       serviceCount: 2,
