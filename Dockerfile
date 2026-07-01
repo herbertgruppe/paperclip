@@ -5,7 +5,8 @@ ARG USER_GID=1000
 RUN apt-get update \
   && apt-get install -y --no-install-recommends ca-certificates gosu curl gh git wget ripgrep python3 \
   && rm -rf /var/lib/apt/lists/* \
-  && corepack enable
+  && corepack enable \
+  && npm install -g npm@latest
 
 # Modify the existing node user/group to have the specified UID/GID to match host user
 RUN usermod -u $USER_UID --non-unique node \
