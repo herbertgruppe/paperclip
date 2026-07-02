@@ -1,0 +1,8 @@
+# syntax=docker/dockerfile:1.20
+# Patched hindsight image: applies OS security updates to upstream 0.8.4
+# Fixes CVE-2026-11940 (python3.13/libpython3.13-minimal) via apt-get upgrade
+# HBE-1588
+FROM ghcr.io/vectorize-io/hindsight:0.8.4
+RUN apt-get update \
+  && apt-get upgrade -y \
+  && rm -rf /var/lib/apt/lists/*
