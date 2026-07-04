@@ -50,6 +50,20 @@ FROM base AS build
 WORKDIR /app
 COPY --from=deps /app /app
 COPY . .
+# Stamp the real build version into server/package.json so vulnerability
+# scanners (e.g. Trivy) report the correct deployed version rather than the
+# static 0.3.1 placeholder. Defaults to 0.3.1 when no ARG is supplied so
+# local / CI builds without --build-arg still work unchanged.
+ARG PAPERCLIP_VERSION=0.3.1
+RUN PAPERCLIP_VERSION="${PAPERCLIP_VERSION}" node -e " \
+  var v = process.env.PAPERCLIP_VERSION; \
+  if (v && v !== '0.3.1') { \
+    var fs = require('fs'); \
+    var p = JSON.parse(fs.readFileSync('server/package.json', 'utf8')); \
+    p.version = v; \
+    fs.writeFileSync('server/package.json', JSON.stringify(p, null, 2) + '\n'); \
+    console.log('Stamped server/package.json version:', v); \
+  }"
 RUN pnpm --filter @paperclipai/ui build
 RUN pnpm --filter @paperclipai/plugin-sdk build
 RUN pnpm --filter @paperclipai/server build
