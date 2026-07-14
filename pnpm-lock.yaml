@@ -9,7 +9,7 @@ overrides:
   react: ^19.2.7
   react-dom: ^19.2.7
   hono: '>=4.12.25'
-  undici: '>=6.27.0'
+  undici: ^7.28.0
 
 patchedDependencies:
   embedded-postgres@18.1.0-beta.16:
@@ -7786,8 +7786,8 @@ packages:
   undici-types@7.24.4:
     resolution: {integrity: sha512-cRaY9PagdEZoRmcwzk3tUV3SVGrVQkR6bcSilav/A0vXsfpW4Lvd0BvgRMwTEDTLLGN+QdyBTG+nnvTgJhdt6w==}
 
-  undici@7.24.4:
-    resolution: {integrity: sha512-BM/JzwwaRXxrLdElV2Uo6cTLEjhSb3WXboncJamZ15NgUURmvlXvxa6xkwIOILIjPNo9i8ku136ZvWV0Uly8+w==}
+  undici@7.28.0:
+    resolution: {integrity: sha512-cRZYrTDwWznlnRiPjggAGxZXanty6M8RV1ff8Wm4LWXBp7/IG8v5DnOm74DtUBp9OONpK75YlPnIjQqX0dBDtA==}
     engines: {node: '>=20.18.1'}
 
   unidiff@1.0.4:
@@ -13757,7 +13757,7 @@ snapshots:
       saxes: 6.0.0
       symbol-tree: 3.2.4
       tough-cookie: 6.0.1
-      undici: 7.24.4
+      undici: 7.28.0
       w3c-xmlserializer: 5.0.0
       webidl-conversions: 8.0.1
       whatwg-mimetype: 5.0.0
@@ -15827,7 +15827,7 @@ snapshots:
 
   undici-types@7.24.4: {}
 
-  undici@7.24.4: {}
+  undici@7.28.0: {}
 
   unidiff@1.0.4:
     dependencies:
